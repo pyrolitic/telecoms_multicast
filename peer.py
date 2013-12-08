@@ -1,11 +1,13 @@
 #!/usr/bin/python3.2
-import socket, struct, hashlib, os
+import socket, struct, hashlib, os, PIL
 
 MULTICAST_GROUP = '235.3.13.37'
 MULTICAST_PORT = 5009
 
 FILE_TYPE_IMAGE = 0
 FILE_TYPE_VIDEO = 1
+
+THUMBNAIL_HIGHEST = 90
 
 class servable_file:
 	def __init__(self, path):
@@ -32,8 +34,11 @@ class servable_file:
 		
 		print('added file ' + self.name + ', of size ' + str(self.size) + ', with content hash ' + str(self.hash).encode('hex'))
 		
-		#if type == FILE_TYPE_IMAGE:
-		#	pass #maybe use PIL to make a thumbnail
+		#create a thumbnail
+		if type == FILE_TYPE_IMAGE:
+			self.thumb = PIL.Image.open(path)
+			#aspect ratio is preserved, so either width or height will be lower than THUMBNAIL_HIGHEST
+			self.thumb.thumnail((THUMBNAIL_HIGHEST, THUMBNAIL_HIGHEST), PIL.Image.ANTIALIAS)
 			
 			
 	def close(self):
@@ -42,10 +47,11 @@ class servable_file:
 
 #requestable file
 class other_file:
-	def __init__(self, name, size, type):
+	def __init__(self, name, size, type, thumb_data, thumb_size): #thumb_size is a tuple
 		self.name = name
 		self.size = size
 		self.type = type
+		self.thumb = Image.fromstring('RGB', thumb_size, thumb_data)
 
 
 #another peer in the network
@@ -87,23 +93,22 @@ class peer:
 				self.files[f.hash] = f
 		
 		except:
-			pass
+			print('can\'t add file ' + path)
 		
 	#let everyone in the network know of our presence, and what we'll serve
 	def send_advertisements(self):
+		print ('sending advertisements for every file')
+	
 		for serv_path in self.files:
 			serv = self.files[serv_path]
-			data = file_meta_struct.pack(PACKET_TYPE_META, serv.size, serv.hash, serv.type, len(serv.name))
+			data = file_meta_struct.pack(PACKET_TYPE_META, serv.size, serv.hash, serv.type, serv.thumb.size[0], serv.thumb.size[1], len(serv.name))
 			data += serv.name.encode("utf8")
+			data += serv.thumb.tostring()
 			
 			#send it to everyone
 			self.multicast_sock.sendto(data, (self.group_ip, self.multicast_port))
-		
-'''
-file_pa = sys.argv[1]
-try:
-		
-'''
+
+
 
 #codec objects for the different types of packets. all types are unsigned
 
@@ -114,22 +119,20 @@ PACKET_TYPE_NO_MORE = 2 #this peer won't deliver any more of this file
 PACKET_TYPE_REQUEST = 3 #ask for a chunk
 PACKET_TYPE_HASH_RESOLVE = 4 #given a content hash, get the file name
 
-#file meta data, sent as an advertisement of available files
-#type (1 byte), content length (8 bytes), content hash (32 bytes), file type (1 byte), file name length (2 bytes), file name (encoded separately)
-#type must be PACKET_TYPE_META
-file_meta_struct = struct.Struct(">BQ32pBH")
+#file meta data, sent as an advertisement of available files. type must be PACKET_TYPE_META
+#type (1 byte), content length (8 bytes), content hash (32 bytes), file type (1 byte), thumbnail width (1 byte), 
+#thumbnail height (1 byte), file name length (2 bytes), file name (encoded separately), uncompressed file thumbnail data (encoded separately)
+file_meta_struct = struct.Struct(">BQ32pBBBH")
 
-#file content chunk, sent on request
+#file content chunk, sent on request. type must be PACKET_TYPE_CHUNK or PACKET_TYPE_NO_MORE
 #type (1 byte), file content hash (32 bytes), first byte index (8 bytes), chunck length (2 bytes), data (separate)
-#type must be PACKET_TYPE_CHUNK or PACKET_TYPE_NO_MORE
 file_chunk_strut = struct.Struct(">B32pQH")
 
-#chunk request, meta data must be known
+#chunk request, meta data must be known. type must be PACKET_TYPE_REQUEST
 #type (1 byte), file content hash (32 bytes), first byte index (8 bytes)
-#type must be PACKET_TYPE_REQUEST
 file_request_struct = struct.Struct(">B32pQ")
 
-#hash to name resolution request. this will be answered by an advertisement
+#hash to name resolution request. this will be answered by an advertisement. type must be PACKET_TYPE_HASH_RESOLVE
 #type (1 byte), file content hash (32 bytes)
 hash_resolution_struct = struct.Struct(">B32p")
 
