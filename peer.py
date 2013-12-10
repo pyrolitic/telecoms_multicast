@@ -1,14 +1,20 @@
 #!/usr/bin/python3.2
-import socket, struct, hashlib, os, PIL
+import socket #networking
+import struct #low level packing
+import hashlib #sha256
+import os #file and dir handling
+from PIL import Image #thumbnailering
 
-#codec objects for the different types of packets. all types are unsigned
 
 #packet types
 PACKET_TYPE_META = 0 #file meta data advertisement
 PACKET_TYPE_CHUNK = 1 #file content chunk
 PACKET_TYPE_NO_MORE = 2 #this peer won't deliver any more of this file
 PACKET_TYPE_REQUEST = 3 #ask for a chunk
-#PACKET_TYPE_HASH_RESOLVE = 4 #given a content hash, get the file name
+#PACKET_TYPE_HASH_RESOLVE = 4 #given a content hash, get the file name #not needed?
+
+
+#codec objects for the different types of packets. all types are unsigned
 
 #file meta data, sent as an advertisement of available files. type must be PACKET_TYPE_META
 #type (1 byte), content length (8 bytes), content hash (32 bytes), file type (1 byte), thumbnail width (1 byte), 
@@ -23,10 +29,11 @@ file_chunk_struct = struct.Struct(">B32pQH")
 #type (1 byte), file content hash (32 bytes), first byte index (8 bytes)
 file_request_struct = struct.Struct(">B32pQ")
 
-#not needed any more
-	#hash to name resolution request. this will be answered by an advertisement. type must be PACKET_TYPE_HASH_RESOLVE
-	#type (1 byte), file content hash (32 bytes)
-	#hash_resolution_struct = struct.Struct(">B32p")
+#not needed any more?
+#hash to name resolution request. this will be answered by an advertisement. type must be PACKET_TYPE_HASH_RESOLVE
+#type (1 byte), file content hash (32 bytes)
+#hash_resolution_struct = struct.Struct(">B32p")
+
 
 
 MULTICAST_GROUP = '235.3.13.37'
@@ -36,25 +43,27 @@ FILE_TYPE_IMAGE = 0
 FILE_TYPE_VIDEO = 1
 
 THUMBNAIL_HIGHEST = 90 #if aspect ratio is not 1:1, this is the maximum the longer side can be
-
 FILE_CHUNK_SIZE = 65535 - 8 - 20 - file_chunk_struct.size #2^16, udb header, ip header, hash and stuff
 
 class servable_file:
-	def __init__(self, type, name, size, chunks=None, hash=None): #opening a local files must include the chunks, while a remote file will have the hash
-		if (chunks and hash) or (not chunks and not hash): #mutually excluive, and one must exist
-			raise Exception #TODO: better error
+	def __init__(self, type, name, size, path=None, chunks=None, hash=None, thumb=None): #opening a local files must include the chunks, while a remote file will have the hash and thumbnail
+		if not ((path and chunks) and not(hash and thumb) or not (path and chunks) and (hash and thumb)):
+			raise Exception #TODO: better errors
 	
 		self.type = type
 		self.name = name
 		self.hash = hash
 		self.size = size
 		self.thumb = thumb
+		self.path = path
+		self.complete = False #whether all the chunks are present
+		
 		
 		if chunks:
-			self.chunks = chunks
-			self.hash = compute_hash() #the hash was None
-			self.make_thumb() #
 			self.complete = True #the file is complete and can be served right away
+			self.chunks = chunks
+			self.hash = self.compute_hash() #the hash was None
+			self.make_thumb() #all the data is present, so 
 		
 		else:
 			chunk_amount = size / FILE_CHUNK_SIZE
@@ -66,24 +75,22 @@ class servable_file:
 	def compute_hash(self):
 		if self.complete:
 			hash_ob = hashlib.sha256()
-			while True:
-				block = self.handle.read(8192)
-				if not block: break
-				hash_ob.update(block)
+			for chunk in self.chunks:
+				hash_ob.update(chunk)
 			
 			return hash_ob.digest()
 		
 		else:
-			print('trying to compute the hash of an icomplete file')
+			print('trying to compute the hash of an incomplete file')
 			raise Exception
 
 	
-	#create a thumbnail for the file		
+	#create a thumbnail for the file	
 	def make_thumb(self):
 		if self.complete:
 			if not self.thumb:
 				if self.type == FILE_TYPE_IMAGE:
-					self.thumb = PIL.Image.open(self.path)
+					self.thumb = Image.open(self.path)
 					#aspect ratio is preserved, so either width or height will be lower than THUMBNAIL_HIGHEST
 					self.thumb.thumnail((THUMBNAIL_HIGHEST, THUMBNAIL_HIGHEST), PIL.Image.ANTIALIAS)
 					
@@ -105,9 +112,9 @@ class servable_file:
 			
 					handle.close()
 				
-				except:
+				except Exception as e:
 					print("could not write data")
-					raise Exception
+					raise e
 					
 			else:
 				print("content of " + self.name + "does not match the given hash")
@@ -144,12 +151,18 @@ class peer:
 	def add_local_file(self, path):
 		file_stat = os.stat(path) #raises exception if file does not exist
 		file_size = file_stat.st_size
+		
+		#substring after either the last / or the last \ (if either exists)
+		name = path.split('/')[-1].split('\\')[-1]
 	
-		if self.size == 0: #no use, it's empty
+		if file_size == 0: #no use, it's empty
 			print("file " + path + "has no contents")
 		
 		else:
 			try:
+				#TODO: deduce type of file
+				type = FILE_TYPE_IMAGE
+			
 				#load all the cunks
 				chunks = []
 				handle = open(path, 'rb') #raises exception if it can't be opened this way
@@ -157,23 +170,20 @@ class peer:
 					chunk = handle.read(FILE_CHUNK_SIZE)
 					if not chunk: break
 					chunks.append(chunk)
-	
-				#TODO: deduce type of file
-				type = FILE_TYPE_IMAGE
 				
-				#substring after either the last / or the last \ (if either exists)
-				name = path.split('/')[-1].split('\\')[-1]
+				handle.close()
+				f = servable_file(type, name, file_size, path=path, chunks=chunks)
 				
-				f = servable_file(type, name, file_size, chunks)
-				
-				if f.hash in self.files:
-					f.close() #already there
+				if f.hash in self.files.keys():
+					print("trying to add already stored(in memory) file")
 	
 				else:
+					print("added file '" + name + "', {" + hex(f.hash) + "}")
 					self.files[f.hash] = f
 	
-			except:
-				print('can\'t add file ' + path)
+			except IOError as e:
+				print('can\'t open file \'' + path + '\' for reading')
+				raise e
 		
 	#let everyone in the network know of our presence, and what we'll serve
 	def send_advertisements(self):
@@ -201,7 +211,7 @@ if __name__ == '__main__':
 		#gather all the files that can be served
 		for f in os.listdir(uploads_dir):
 			if os.path.isfile(f):
-				peer.add_file(f)
+				peer.add_local_file(f)
 				
 		peer.send_advertisements()
 	
