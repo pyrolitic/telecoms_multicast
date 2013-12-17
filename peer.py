@@ -118,11 +118,11 @@ class Peer(threading.Thread):
 				
 				
 	def send_presence(self):
-		constant.time_print("sent presence packet")
+		#constant.time_print("sent presence packet")
 		data = packet.make_presence_packet(self.nick)
 		self.multicast_sock.sendto(data, (constant.MULTICAST_GROUP, constant.MULTICAST_PORT))
 		self.presence_last_sent = time.time()
-				
+		
 
 	#this will listen continuously for incoming packets and handle/reply to them
 	def run(self): 
@@ -139,7 +139,7 @@ class Peer(threading.Thread):
 				other = self.others[addr]
 				if now - other.last_presence > constant.TIME_TO_MISSING:
 					other.missing = True
-					gone.append[other]
+					gone.appen(other)
 				
 			for left in gone:
 				constant.time_print(self.others[left].name + "(" + left + ") left")
@@ -150,8 +150,8 @@ class Peer(threading.Thread):
 				#we're still here
 				self.send_presence()
 		
-		
-			#process acknowledgements first, which are unicast
+			'''
+			#process acknowledgements first, which are received on the unicast socket
 			while True: #handle every ack packet in the queue
 				try:
 					data, (addr, _) = self.unicast_sock.recvfrom(constant.UDP_PACKET_SIZE)
@@ -185,21 +185,38 @@ class Peer(threading.Thread):
 					
 				except BadPacketException as e:
 					constant.time_print("bad packet from " + e.source)
-					
+			'''
 	
 			#then handle the multicast packets
 			while True: #handle every packet in the queue
 				try:
-					data, (addr, _) = self.multicast_sock.recvfrom(constant.UDP_PACKET_SIZE)
+					data, (addr, _) = self.multicast_sock.recvfrom(constant.UDP_PACKET_SIZE) #the function returns (data, (addr, port)), but port is not needed
 					packet_type = ord(data[0])
 					
 					constant.time_print("received packet with type " + str(packet_type))
+					
+					
+					#acknowledgements
+					if packet_type in (packet.PACKET_TYPE_ACK_META, packet.PACKET_TYPE_ACK_CHUNK, packet.PACKET_TYPE_ACK_DELETE):
+						try:
+							file_hash, chunk_id = packet.ack_struct.unpack(data[1:])
+						
+						except Exception as e:
+							raise BadPacketException(addr, e)
+						
+						if file_hash in self.outgoing:
+							f = self.files[file_hash]
+							f.got_ack(addr, packet_type, chunk_id)
+							if f.deleted:
+								constant.time_print("successfully delivered file " + f.name)
+								self.outgoing.remove(f)
+								
 
 					#this peer (still) exists
-					if packet_type == packet.PACKET_TYPE_PRESENCE:
+					elif packet_type == packet.PACKET_TYPE_PRESENCE:
 						constant.time_print("presence packet from " + addr)
 						try:
-							nick_encoded_len = packet.presence_struct.unpack(data[1 : 1 + packet.presence_struct.size])
+							nick_encoded_len = packet.presence_struct.unpack(data[1 : 1 + packet.presence_struct.size])[0] #[0] needed cause it's a one-tuple
 							nick_encoded = data[1 + packet.presence_struct.size:]
 							nick = nick_encoded.decode('utf8')
 							assert nick_encoded_len == len(nick_encoded)
@@ -239,7 +256,7 @@ class Peer(threading.Thread):
 			
 						#send a unicast acknowledgement
 						ack = packet.make_ack_packet(file_hash)
-						self.unicast_sock.sendto(ack, (addr, constant.UNICAST_PORT))
+						self.unicast_sock.sendto(ack, (addr, constant.MULTICAST_PORT))
 			
 	
 					#this peer is giving us another piece of some file
@@ -257,16 +274,16 @@ class Peer(threading.Thread):
 							#only keep chunks of files we know of
 							self.incoming[file_hash].add_chunk(chunk_id, chunk)
 				
-							#send an ack to the sender as unicast
+							#send a unicast acknowledgement
 							ack = packet.make_ack_packet(file_hash, chunk_id)
-							self.unicast_sock.sendto(ack, (addr, constant.UNICAST_PORT))
+							self.unicast_sock.sendto(ack, (addr, constant.MULTICAST_PORT))
 		
 	
 					#this peer  wants us not to have the file anymore
 					elif packet_type == packet.PACKET_TYPE_DELETE:
 						constant.time_print("delete packet from " + addr)
 						try:
-							file_hash = packet.delete_struct.unpack(data[1:])
+							file_hash = packet.delete_struct.unpack(data[1:])[0]
 						
 						except Exception as e:
 							raise BadPacketException(addr, e)
@@ -279,7 +296,7 @@ class Peer(threading.Thread):
 						#send ack whether we had file or not, since it could be the case that before we got the metadata, 
 						#the sender wants to delete the file early; also it could be that our first ack was dropped
 						ack = packet.make_ack_packet(file_hash, packet.PACKET_TYPE_ACK_DELETE)
-						self.unicast_sock.sendto(ack, (addr, constant.UNICAST_PORT))
+						self.unicast_sock.sendto(ack, (addr, constant.MULTICAST_PORT))
 
 
 					else:
@@ -325,12 +342,14 @@ class Peer(threading.Thread):
 		self.activity_lock.release()
 
 
+#runs on ^C
 def signal_handler(signal, frame):
 	print("hard shutdown")
 	os._exit(1)
 
+
 if __name__ == '__main__':
-	#the program is being invoked directly (rather than being imported as library)
+	#the module is being invoked directly (rather than being imported as a library)
 	
 	signal.signal(signal.SIGINT, signal_handler) #*nix
 	#signal.signal(signal.CTRL_C_EVENT, signal_handler) #windoze
