@@ -1,10 +1,10 @@
 #own files
-from proto_file import *
+from proto_file import ProtoFile
 
 #files being received from the network
-class IncomingFile:
+class IncomingFile(ProtoFile):
 	#                  number,    string,    number,    string,    number,       PIL.Image
-	def __init__(self, file_type, file_name, file_size, file_hash, time_to_live, thumbail):
+	def __init__(self, file_type, file_name, file_size, file_hash, time_to_live, thumbnail):
 		ProtoFile(self, file_type, file_name, file_size, time_to_live)
 		
 		self.hash = file_hash
@@ -16,14 +16,14 @@ class IncomingFile:
 	#chunk was downloaded, so add it to the list
 	def add_chunk(self, chunk_id, chunk):
 		if not self.complete:
-			if chunks_id >= 0 and chunk_id < len(self.chunks):
+			if chunk_id >= 0 and chunk_id < len(self.chunks):
 				if self.chunks[chunk_id] is None:
 					self.chunks[chunk_id] = chunk
 					if all(self.chunks): #every chunk is not None; TODO: replace this with a counter, cause it's O(n)
 						self.complete = True
 
 				else:
-					if self.chunks[chunks_id] == chunk:
+					if self.chunks[chunk_id] == chunk:
 						self.message("warning: trying to replace chunk " + str(chunk_id) + " with the same data")
 
 					else:

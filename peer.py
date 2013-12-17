@@ -3,17 +3,17 @@
 #libraries
 import socket #IP networking
 import os #file and dir handling
-import math, time #constant.time_print, thread sleeping
+import time #constant.time_print, thread sleeping
 from PIL import Image #thumbnailering
 import struct #binary packing and unpacking
 import threading #threading, synchronization
-import random #random number generator
+
 import sys #command line arguments
 import signal #hard exit on ^C
 
 #own files
-from outgoing_file import *
-from incoming_file import *
+from outgoing_file import OutgoingFile
+from incoming_file import IncomingFile
 import constant
 import packet
 
@@ -101,7 +101,7 @@ class Peer(threading.Thread):
 				self.activity_lock.acquire() #self.others and OutgoingFile existance and state must be atomic relative to threading
 				
 				recipients = self.others.copy() #clone of recipients, at this time #TODO: ensure that others with .missing set are not present at this point in time
-				f = OutgoingFile(file_type, name, file_size, path, time_to_live, self.others.copy())
+				f = OutgoingFile(file_type, name, file_size, path, time_to_live, recipients)
 				
 				if f.hash in self.outgoing.keys():
 					constant.time_print("trying to add already stored(in memory) file")
@@ -138,7 +138,7 @@ class Peer(threading.Thread):
 			for addr in self.others:
 				other = self.others[addr]
 				if now - other.last_presence > constant.TIME_TO_MISSING:
-					ohter.missing = True
+					other.missing = True
 					gone.append[other]
 				
 			for left in gone:
@@ -154,7 +154,7 @@ class Peer(threading.Thread):
 			#process acknowledgements first, which are unicast
 			while True: #handle every ack packet in the queue
 				try:
-					data, (addr, port) = self.unicast_sock.recvfrom(constant.UDP_PACKET_SIZE)
+					data, (addr, _) = self.unicast_sock.recvfrom(constant.UDP_PACKET_SIZE)
 					packet_type = ord(data[0])
 					
 					constant.time_print("received packet with type " + str(packet_type))
@@ -190,7 +190,7 @@ class Peer(threading.Thread):
 			#then handle the multicast packets
 			while True: #handle every packet in the queue
 				try:
-					data, (addr, port) = self.multicast_sock.recvfrom(constant.UDP_PACKET_SIZE)
+					data, (addr, _) = self.multicast_sock.recvfrom(constant.UDP_PACKET_SIZE)
 					packet_type = ord(data[0])
 					
 					constant.time_print("received packet with type " + str(packet_type))
@@ -200,7 +200,9 @@ class Peer(threading.Thread):
 						constant.time_print("presence packet from " + addr)
 						try:
 							nick_encoded_len = packet.presence_struct.unpack(data[1 : 1 + packet.presence_struct.size])
-							nick = data[1 + packet.presence_struct.size:].decode('utf8')
+							nick_encoded = data[1 + packet.presence_struct.size:]
+							nick = nick_encoded.decode('utf8')
+							assert nick_encoded_len == len(nick_encoded)
 			
 						except Exception as e:
 							raise BadPacketException(addr, e)
@@ -210,7 +212,7 @@ class Peer(threading.Thread):
 							other.last_presence = now
 							
 							if other.nick != nick:
-								time_print(other.nick + " is now known as " + nick)
+								constant.time_print(other.nick + " is now known as " + nick)
 								
 							other.nick = nick
 							other.missing = False #in case they were marked as missing above
@@ -233,7 +235,7 @@ class Peer(threading.Thread):
 		
 						#add it to the list
 						if file_hash not in self.incoming:
-							self.incoming[file_hash] = servable_file(file_type, file_name, file_size, file_hash, time_to_live, thumb)
+							self.incoming[file_hash] = IncomingFile(file_type, file_name, file_size, file_hash, time_to_live, thumb)
 			
 						#send a unicast acknowledgement
 						ack = packet.make_ack_packet(file_hash)
@@ -276,7 +278,7 @@ class Peer(threading.Thread):
 						
 						#send ack whether we had file or not, since it could be the case that before we got the metadata, 
 						#the sender wants to delete the file early; also it could be that our first ack was dropped
-						ack = packet.make_ack_packet(file_hash, packet.PACKET_TYPE_ACK_DELETED)
+						ack = packet.make_ack_packet(file_hash, packet.PACKET_TYPE_ACK_DELETE)
 						self.unicast_sock.sendto(ack, (addr, constant.UNICAST_PORT))
 
 
@@ -305,8 +307,13 @@ class Peer(threading.Thread):
 			deleting = []
 			for incoming in self.incoming.values():
 				if incoming.completed:
-					if now - incoming.completed_at > imcoming.ttl:
-						deleting.push(incomfing.hash)
+					if now - incoming.completed_at > incoming.ttl:
+						deleting.push(incoming.hash)
+						
+			for file_hash in deleting:
+				f = self.incoming[file_hash]
+				constant.time_print("deleting file " + f.name)
+				self.incoming.remove(file_hash)
 					
 				
 			self.activity_lock.release() #keep all state changes atomic with respect to threads
@@ -350,7 +357,7 @@ if __name__ == '__main__':
 				elif command == 'peers':
 					if len(peer.others) > 0:
 						for addr in peer.others:
-							print(peer.others[addr].nick + "(" + addr + ")")
+							print(" " + peer.others[addr].nick + "(" + addr + ")")
 							
 					else:
 						print("all alone")

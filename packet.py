@@ -85,7 +85,7 @@ def make_delete_packet(file_hash):
 ack_struct = struct.Struct(">32sI")
 def make_ack_packet(file_hash, packet_type, chunk_id = -1):
 	ack_id = chunk_id
-	if packet_type == PACKET_TYPE_ACK_CONTENT: ack_id = chunk_id
+	if packet_type == PACKET_TYPE_ACK_CHUNK: ack_id = chunk_id
 	
 	data = packet_type_struct.pack(packet_type)
 	data += ack_struct.pack(file_hash, ack_id)

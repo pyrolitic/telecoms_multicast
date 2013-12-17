@@ -1,9 +1,10 @@
 #libraries
 from PIL import Image #thumbnailering
+import random #for picking recipients at random
 import time
 
 #own files
-from proto_file import *
+from proto_file import ProtoFile
 import packet
 import constant
 
@@ -69,7 +70,7 @@ class OutgoingFile(ProtoFile):
 			if r.missing:
 				if addr in self.meta_acks: self.meta_acks.remove(addr)
 				if addr in self.content_acks: self.content_acks.remove(addr)
-				if addr in self.delete_acks: self.delete_acks.remove(key)
+				if addr in self.delete_acks: self.delete_acks.remove(addr)
 				gone.append(addr)
 		
 		for addr in gone:
@@ -88,7 +89,7 @@ class OutgoingFile(ProtoFile):
 				data = packet.make_meta_packet(self.name, self.hash, self.size, self.type, self.thumb, self.ttl)
 		
 			elif not self.content_sent:
-				key = self.content_sent.keys[randrange(0, len(self.content_acks))] #pick any recipient at random
+				key = self.content_sent.keys[random.randrange(0, len(self.content_acks))] #pick any recipient at random
 				if not self.content_began_at: self.content_began_at = time.time()
 				chunk_id = self.content_sent[key][0] #send the first 
 				data = packet.make_chunk_packet(self.hash, chunk_id, self.chunks[chunk_id])
@@ -105,18 +106,18 @@ class OutgoingFile(ProtoFile):
 	def got_ack(self, addr, packet_type, chunk_id):
 		if packet_type == packet.PACKET_TYPE_ACK_META:
 			if addr in self.meta_acks:
-				self.meta_acks.remove(peer)
+				self.meta_acks.remove(addr)
 				
 				if len(self.meta_acks) == 0: #every recipient has acknowledged the meta data packet
 					self.meta_sent = True
 				
-		elif packet_type == packet.PACKET_TYPE_ACK_CONTENT:
+		elif packet_type == packet.PACKET_TYPE_ACK_CHUNK:
 			if addr in self.content_acks:
-				self.content_acks[peer].remove(chunk_id)
-				if len(self.content_acks[peer]) == 0: self.content_acks.remove(peer) #this peer has acknowledged every chunk
+				self.content_acks[addr].remove(chunk_id)
+				if len(self.content_acks[addr]) == 0: self.content_acks.remove(addr) #this peer has acknowledged every chunk
 				if len(self.content_acks) == 0: self.content_sent = True
 		
-		elif packet_type == packet.PACKET_TYPE_ACK_DELETED:
+		elif packet_type == packet.PACKET_TYPE_ACK_DELETE:
 			if addr in self.content_acks:
 				self.delete_acks.remove(addr)
 				if len(self.delete_acks) == 0:
