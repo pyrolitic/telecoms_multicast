@@ -16,12 +16,14 @@ PACKET_TYPE_ACK_DELETE = 6 #acknowledgement having deleted a file
 
 #codec objects for the different types of packets. all types are unsigned
 
+packet_type_struct = struct.Struct('>B')
+
 #type must be PACKET_TYPE_PRESENCE
 #type, name length, name (separate)
 presence_struct = struct.Struct(">H")
 def make_presence_packet(peer_name):
 	nick = peer_name[:constant.NICK_NAME_LONGEST] if len(peer_name) > constant.NICK_NAME_LONGEST else peer_name #truncate to NICK_NAME_LONGEST characters
-	data = str(PACKET_TYPE_PRESENCE)
+	data = packet_type_struct.pack(PACKET_TYPE_PRESENCE)
 	data += presence_struct.pack(len(nick))
 	data += nick.encode('utf8')
 	return data
@@ -47,7 +49,7 @@ def make_meta_packet(file_name, file_hash, file_size, file_type, thumbnail, time
 		thumb_w = thumbnail.size[0]
 		thumb_h = thumbnail.size[1]
 	
-	data = str(PACKET_TYPE_META)
+	data = packet_type_struct.pack(PACKET_TYPE_META)
 	data += meta_struct.pack(file_size, file_hash, file_type, thumb_w, thumb_h, len(encoded_name), time_to_live)
 	data += encoded_name
 	if thumbnail is not None: data += thumbnail.tostring() #uncompressed
@@ -58,7 +60,7 @@ def make_meta_packet(file_name, file_hash, file_size, file_type, thumbnail, time
 #type(1), file content hash(32), chunk id(4), chunck length(2), data (varies, separate)
 chunk_struct = struct.Struct(">32pIH")
 def make_chunk_packet(file_hash, chunk_id, chunk):
-	data = str(PACKET_TYPE_CHUNK)
+	data = packet_type_struct.pack(PACKET_TYPE_CHUNK)
 	data += chunk_struct.pack(file_hash, chunk_id, len(chunk))
 	data += chunk
 	return data
@@ -68,7 +70,7 @@ def make_chunk_packet(file_hash, chunk_id, chunk):
 #type(1), content hash(32)
 delete_struct = struct.Struct(">32p")
 def make_delete_packet(file_hash):
-	data = str(PACKET_TYPE_DELETE)
+	data = packet_type_struct.pack(PACKET_TYPE_DELETE)
 	data += delete_struct.pack(file_hash)
 	return data
 
@@ -83,7 +85,7 @@ def make_ack_packet(file_hash, packet_type, chunk_id = -1):
 	ack_id = chunk_id
 	if packet_type == PACKET_TYPE_ACK_CONTENT: ack_id = chunk_id
 	
-	data = str(packet_type)
+	data = packet_type_struct.pack(packet_type)
 	data += ack_struct.pack(file_hash, ack_id)
 	return data
 	
