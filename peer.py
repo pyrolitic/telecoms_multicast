@@ -135,13 +135,14 @@ class Peer(threading.Thread):
 		
 			#are we missing anyone?
 			gone = []
-			for other in self.others:
+			for addr in self.others:
+				other = self.others[addr]
 				if now - other.last_presence > constant.TIME_TO_MISSING:
 					ohter.missing = True
 					gone.append[other]
 				
 			for left in gone:
-				constant.time_print(self.others[left].name + "(" + left + ") is gone")
+				constant.time_print(self.others[left].name + "(" + left + ") left")
 				self.others.remove(left)
 	
 
@@ -198,18 +199,17 @@ class Peer(threading.Thread):
 					if packet_type == packet.PACKET_TYPE_PRESENCE:
 						constant.time_print("presence packet from " + addr)
 						try:
-							nick_encoded_len = packet.presence_struct.unpack(data[1 : presence_struct.size + 1])
-							nick = data[presence_struct.size + 1 :].decode('utf8')
+							nick_encoded_len = packet.presence_struct.unpack(data[1 : 1 + packet.presence_struct.size])
+							nick = data[1 + packet.presence_struct.size:].decode('utf8')
 			
 						except Exception as e:
 							raise BadPacketException(addr, e)
 			
 						if addr in self.others:
 							other = self.others[addr]
-
 							other.last_presence = now
 							
-							if other.nick is not nick:
+							if other.nick != nick:
 								time_print(other.nick + " is now known as " + nick)
 								
 							other.nick = nick
@@ -223,9 +223,9 @@ class Peer(threading.Thread):
 					elif packet_type == packet.PACKET_TYPE_META:
 						constant.time_print("meta packet from " + addr)
 						try:
-							file_size, file_hash, file_type, thumb_w, thumb_h, time_to_live, file_name_len = meta_struct.unpack(data[1 : meta_struct.size + 1])
-							file_name = data[1 + meta_struct.size : 1 + meta_struct.size + file_name_len].decode('utf8')
-							thumb_data = data[1 + meta_struct.size + file_name_len :]
+							file_size, file_hash, file_type, thumb_w, thumb_h, time_to_live, file_name_len = packet.meta_struct.unpack(data[1 : packet.meta_struct.size + 1])
+							file_name = data[1 + packet.meta_struct.size : 1 + packet.meta_struct.size + file_name_len].decode('utf8')
+							thumb_data = data[1 + packet.meta_struct.size + file_name_len :]
 							thumb = Image.fromstring(thumb_data, (thumb_w, thumb_h))
 			
 						except Exception as e:
@@ -244,8 +244,8 @@ class Peer(threading.Thread):
 					elif packet_type == packet.PACKET_TYPE_CHUNK:
 						constant.time_print("chunk packet from " + addr)
 						try:
-							file_hash, chunk_id, chunk_len = chunk_struct.unpack(data[1 : chunk_struct.size + 1])
-							chunk = data[1 + chunk_struct :]
+							file_hash, chunk_id, chunk_len = packet.chunk_struct.unpack(data[1 : packet.chunk_struct.size + 1])
+							chunk = data[1 + packet.chunk_struct :]
 							assert len(chunk) == chunk_len
 			
 						except Exception as e:
@@ -264,7 +264,7 @@ class Peer(threading.Thread):
 					elif packet_type == packet.PACKET_TYPE_DELETE:
 						constant.time_print("delete packet from " + addr)
 						try:
-							file_hash = delete_struct.unpack(data[1:])
+							file_hash = packet.delete_struct.unpack(data[1:])
 						
 						except Exception as e:
 							raise BadPacketException(addr, e)
@@ -331,7 +331,7 @@ if __name__ == '__main__':
 	if len(sys.argv) == 2:
 		donwloads_dir = sys.argv[1]
 		
-		peer = Peer('magic')
+		peer = Peer('blank')
 		peer.start() #spawn network thread
 		
 		#basic console
@@ -342,8 +342,6 @@ if __name__ == '__main__':
 				tokens = line.split(' ')
 				command = tokens[0].lower()
 				
-				print (command)
-			
 				if command == 'kill':
 					peer.kill()
 					print("goodbye")
@@ -357,6 +355,9 @@ if __name__ == '__main__':
 					else:
 						print("all alone")
 					
+				elif command == 'nick':
+					nick = tokens[1]
+					peer.nick = nick
 				
 				elif command == 'send':
 					path = tokens[1]
@@ -366,6 +367,7 @@ if __name__ == '__main__':
 				elif command == 'help':
 					print("kill - end the progrma")
 					print("peers - list known peers")
+					print("nick <name> - change own nickname")
 					print("send <path> <ttl in seconds> - send a file to all known peers")
 					
 				else: raise Exception()
