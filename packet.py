@@ -32,7 +32,7 @@ def make_presence_packet(peer_name):
 #file meta data, sent to initialize a file transmission, to let the receivers know about the file. 
 #type(1), content length(8), content hash(32), file type(1), thumbnail width(1), height(1), file name length(2), time to live(4), file name (varies), thumbnail data (varies)
 #thumbnail can be missing (None), in which case width and height are 0 and thumbnail data has 0 length
-meta_struct = struct.Struct(">Q32pBBBHI")
+meta_struct = struct.Struct(">Q32sBBBHI")
 META_MAX_THUMB_SIZE = constant.THUMBNAIL_HIGHEST * constant.THUMBNAIL_HIGHEST * 3
 def make_meta_packet(file_name, file_hash, file_size, file_type, thumbnail, time_to_live):	
 	#type must be PACKET_TYPE_META, encoded file name and thumbnail data cannnot exceed 65461 bytes
@@ -57,9 +57,11 @@ def make_meta_packet(file_name, file_hash, file_size, file_type, thumbnail, time
 		
 
 #file content chunk, sent after meta data. type must be PACKET_TYPE_CHUNK
-#type(1), file content hash(32), chunk id(4), chunck length(2), data (varies, separate)
-chunk_struct = struct.Struct(">32pIH")
+#type(1), file content hash(32), chunk id(4), chunck length(2), data (varies)
+chunk_struct = struct.Struct(">32sIH")
+FILE_CHUNK_SIZE = constant.UDP_PACKET_SIZE - 1 - chunk_struct.size #1 is for packet type; max size of a chunk. the final chunk can be smaller
 def make_chunk_packet(file_hash, chunk_id, chunk):
+	assert len(chunk) > 0 and len(chunk) <= FILE_CHUNK_SIZE
 	data = packet_type_struct.pack(PACKET_TYPE_CHUNK)
 	data += chunk_struct.pack(file_hash, chunk_id, len(chunk))
 	data += chunk
@@ -68,7 +70,7 @@ def make_chunk_packet(file_hash, chunk_id, chunk):
 
 #file deletion request
 #type(1), content hash(32)
-delete_struct = struct.Struct(">32p")
+delete_struct = struct.Struct(">32s")
 def make_delete_packet(file_hash):
 	data = packet_type_struct.pack(PACKET_TYPE_DELETE)
 	data += delete_struct.pack(file_hash)
@@ -80,7 +82,7 @@ def make_delete_packet(file_hash):
 #2. a chunk is received (PACKET_TYPE_ACK_CONTENT)
 #3. a file was deleted on request (PACKET_TYPE_ACK_DELETED, chunk_id is set to 0)
 #type(1), file content hash(32), chunk index(4)
-ack_struct = struct.Struct(">32pI")
+ack_struct = struct.Struct(">32sI")
 def make_ack_packet(file_hash, packet_type, chunk_id = -1):
 	ack_id = chunk_id
 	if packet_type == PACKET_TYPE_ACK_CONTENT: ack_id = chunk_id
@@ -90,5 +92,5 @@ def make_ack_packet(file_hash, packet_type, chunk_id = -1):
 	return data
 	
 
-FILE_CHUNK_SIZE = constant.UDP_PACKET_SIZE - 1 - chunk_struct.size #1 is for packet type; max size of a chunk. the final chunk can be smaller
+
 
