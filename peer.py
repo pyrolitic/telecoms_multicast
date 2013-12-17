@@ -1,213 +1,76 @@
 #!/usr/bin/python3.2
-import socket #networking
-import struct #low level packing
-import hashlib #sha256
+
+#libraries
+import socket #IP networking
 import os #file and dir handling
-import math, time #time_print
+import math, time #constant.time_print, thread sleeping
 from PIL import Image #thumbnailering
+import struct #binary packing and unpacking
+import threading #threading, synchronization
+import random #random number generator
+import sys #command line arguments
+import signal #hard exit on ^C
 
-
-def time_print(message):
-	now = time.gmtime()
-	epoch = time.time()
-	print("%s:%s:%s:%s %s" % (now.tm_hour, now.tm_min, now.tm_sec, str(epoch - math.floor(epoch))[2:4], message))
-	
-
-#packet types
-PACKET_TYPE_META = 0 #file meta data advertisement
-PACKET_TYPE_CHUNK = 1 #file content chunk
-PACKET_TYPE_NO_MORE = 2 #this peer won't deliver any more of this file
-PACKET_TYPE_REQUEST = 3 #ask for a chunk
-#PACKET_TYPE_HASH_RESOLVE = 4 #given a content hash, get the file name #not needed?
-
-
-#codec objects for the different types of packets. all types are unsigned
-
-#file meta data, sent as an advertisement of available files. type must be PACKET_TYPE_META
-#type (1 byte), content length (8 bytes), content hash (32 bytes), file type (1 byte), thumbnail width (1 byte), 
-#thumbnail height (1 byte), file name length (2 bytes), file name (encoded separately), thumbnail data (encoded separately)
-file_meta_struct = struct.Struct(">Q32pBBBH")
-
-#file content chunk, sent on request. type must be PACKET_TYPE_CHUNK or PACKET_TYPE_NO_MORE
-#type (1 byte), file content hash (32 bytes), chunk id (4 bytes), chunck length (2 bytes), data (separate)
-file_chunk_struct = struct.Struct(">32pIH")
-
-#chunk request, meta data must be known. type must be PACKET_TYPE_REQUEST
-#type (1 byte), file content hash (32 bytes), chunk index (4 bytes)
-file_request_struct = struct.Struct(">32pI")
-
-#not needed any more?
-#hash to name resolution request. this will be answered by an advertisement. type must be PACKET_TYPE_HASH_RESOLVE
-#type (1 byte), file content hash (32 bytes)
-#hash_resolution_struct = struct.Struct(">B32p")
-
-
-
-MULTICAST_GROUP = '235.3.13.37'
-MULTICAST_PORT = 5009
-
-FILE_TYPE_IMAGE = 0
-FILE_TYPE_VIDEO = 1
-FILE_TYPE_OTHER = 2
-
-THUMBNAIL_HIGHEST = 90 #if aspect ratio is not 1:1, this is the maximum the longer side can be
-FILE_CHUNK_SIZE = 65535 - 8 - 20 - 1 - file_chunk_struct.size #2^16, udp header, ip header, packet type, hash and stuff
-
-
-#handle for files that are sent through the network, whether they have originated locally or are on a remote peer, or in between the two (parts of them are present, parts are missing)
-#files a split into chunks as large as possible in a UDP packet (see FILE_CHUNK_SIZE)
-class servable_file:
-	def __init__(self, type, name, size, path=None, chunks=None, hash=None, thumb=None): #opening a local files must include the chunks, while a remote file will have the hash and thumbnail
-		if not ((path and chunks) and not(hash and thumb) or not (path and chunks) and (hash and thumb)):
-			raise Exception #TODO: better errors
-	
-		self.type = type
-		self.name = name
-		self.hash = hash
-		self.size = size
-		self.thumb = thumb
-		
-		self.path = path
-		self.complete = False #whether all the chunks are present
-		
-		if chunks:
-			self.complete = True #all the data is present
-			self.chunks = chunks
-			self.hash = self.compute_hash() #the hash was None
-			self.make_thumb() #all the data is present, so 
-			
-		
-		else:
-			chunk_amount = size / FILE_CHUNK_SIZE
-			if size % FILE_CHUNK_SIZE > 0: chunk_amount += 1
-			self.chunks = [None for i in range(chunkAmount)] #array filled with Nones for all the chunks that will be requested from the network
-			
-			
-	#@<name>(hash): <message>, for a common template
-	def message(self, str):
-		time_print("@" + self.name + hex(self.hash) + ": " + str)
-			
-			
-	#chunk was downloaded, so add it to the list
-	def add_chunk(self, chunk_id, chunk):
-		if not self.complete:
-			if chunks_id >= 0 and chunk_id < len(self.chunks):
-				if self.chunks[chunk_id] is None:
-					self.chunks[chunk_id] = chunk
-					if all(self.chunks): #every chunk is not None
-						self.complete = True
-					
-				else:
-					if self.chunks[chunks_id] == chunk:
-						self.message("warning: trying to replace chunk " + str(chunk_id) + " with the same data")
-					
-					else:
-						self.message("warning: trying to replace chunk " + str(chunk_id) + " with different data")
-						
-			else:
-				self.message("warning: chunk id " + str(chunk_id) + " out of range")
-		
-		else:
-			self.message("trying to add chunk to already complete file")
-		
-	
-	#sha 256 hash of the contents of the file, if all the chunks are present
-	def compute_hash(self):
-		if self.complete:
-			hash_ob = hashlib.sha256()
-			for chunk in self.chunks:
-				hash_ob.update(chunk)
-			
-			return hash_ob.digest()
-		
-		else:
-			self.message('warning: trying to compute the hash of an incomplete file')
-			raise Exception
-
-	
-	#create a thumbnail for the file	
-	def make_thumb(self):
-		if self.complete:
-			if not self.thumb:
-				if self.type == FILE_TYPE_IMAGE:
-					self.thumb = Image.open(self.path)
-					#aspect ratio is preserved, so either width or height will be lower than THUMBNAIL_HIGHEST
-					self.thumb.thumnail((THUMBNAIL_HIGHEST, THUMBNAIL_HIGHEST), PIL.Image.ANTIALIAS)
-					
-			else:
-				self.message('warning: trying to create a thumbnail that already exists')
-	
-	
-	#write the received file on to the disk			
-	def write_file(self, dest_dir):
-		if self.complete:
-			#add up the size of all the chunks and compare them to the size that we got from the peer
-			content_got_size = 0
-			for chunk in self.chunks:
-				content_got_size += len(chunk)
-
-			if content_got_size == self.size:
-				#get the hash of the actual content received and compare it to the hash that we got from the peer
-				content_got_hash = compute_hash()
-
-				if content_got_hash == self.hash:
-					self.path = dest_dir + '/' + self.name
-					try:
-						handle = open(self.path, 'wb')
-
-						for chunk in self.chunks:
-							handle.write(chunk)
-
-						handle.close()
-						self.message("wrote downloaded file " + self.name)
-
-					except Exception as e:
-						self.message("error: could not write data to path " + self.path)
-						raise e
-
-				else:
-					self.message("error: hash of content(" + hex(content_got_hash) + "does not match the given hash")
-
-			else:
-				self.message("error: size of content of does not match the given size")
-
+#own files
+from outgoing_file import *
+from incoming_file import *
+import constant
+import packet
 
 #another peer in the network
-class other:
-	def __init__(self):
-		self.files = [] #hashes
+#instances of these objects sould be globally unique (one for each peer), so that when a peer is missed, the self.missing flag will be set, and the OutgoingFile code will remove it from its list of recipients
+class OtherPeer:
+	def __init__(self, nick):
+		self.nick = nick
+		self.last_presence = time.time() #now
+		self.missing = False
 
-	def file_advert(self, content_hash, name, size, type):
-		if content_hash not in self.files:
-			self.files.append(content_hash)
+class BadPacketException(Exception):
+	def __init__(self, source):
+		self.source = source
+		Exception.__init__(self, "received packet that could not be decoded")
 
-#self
-class peer:
-	def __init__(self, group_ip, multicast_port):
-		self.group_ip = group_ip
-		self.multicast_port = multicast_port
-
+#peer running on this computer; there should only be one instance of this
+class Peer(threading.Thread):
+	def __init__(self, nickname):
+		threading.Thread.__init__(self)
+		self.nick = nickname
+	
 		self.multicast_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP) #udp datagram over ip
 		self.multicast_sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 1) #one hop only, which limits it to the local network
 		self.multicast_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1) #http://stackoverflow.com/questions/14388706/socket-options-so-reuseaddr-and-so-reuseport-how-do-they-differ-do-they-mean-t
-		self.multicast_sock.bind(('', self.multicast_port)) #listen on any interface
+		self.multicast_sock.setblocking(0) #will now throw an error if recv() doesn't have anything to show
+		self.multicast_sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 0)
+		self.multicast_sock.bind(('', constant.MULTICAST_PORT)) #listen on any interface
 
 		#subscribe to the multicast group, receiving on any interface
-		mreq = struct.pack("4sl", socket.inet_aton(self.group_ip), socket.INADDR_ANY)
+		mreq = struct.pack("4sl", socket.inet_aton(constant.MULTICAST_GROUP), socket.INADDR_ANY)
 		self.multicast_sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
 		
 		self.unicast_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP) #also create a socket that's used for one-to-one sending
+		self.unicast_sock.setblocking(0) #same as the other socket
 	
-		self.files = dict() #hash string => servable_file object
-		self.files_to_send = [] #which files are to be sent (TODO: only once?)
-		self.files_to_get = [] #files with missing chunks and will be requested
+		self.outgoing = dict() #hash(string) => files being sent and/or still alive (OutgoingFile)
+		self.incoming = dict() #hash(sintrg) => files being received and/or still alive (IncomingFile)
 		
-	def add_local_file(self, path):
+		self.presence_last_sent = None #when the last presence packet was sent
+		
+		#threading, synchronization
+		self.running = False
+		self.activity_lock = threading.Lock()
+		
+		self.others = dict() #address(string) => OtherPeer
+		
+		self.send_presence() #if nothing above threw an error, we can sefaly say we're present in the network
+		
+
+	def add_file_to_send(self, path, time_to_live):
 		file_stat = None
 		try:
 			file_stat = os.stat(path) #raises exception if file does not exist
+			
 		except Exception as e:
-			time_print('trying to add nonexisting file \'' + path + '\'')
+			constant.time_print('trying to add nonexisting file \'' + path + '\'')
 			return
 			
 		file_size = file_stat.st_size
@@ -216,142 +79,297 @@ class peer:
 		name = path.split('/')[-1].split('\\')[-1]
 	
 		if file_size == 0: #no use, it's empty
-			time_print("file " + path + "has no contents")
+			constant.time_print("file " + path + "has no contents")
 		
 		else:
 			try:
-				#TODO: deduce type of file
-				file_type = FILE_TYPE_OTHER
-			
-				#load all the cunks
-				chunks = []
-				handle = open(path, 'rb') #raises exception if it can't be opened this way
-				while True:
-					chunk = handle.read(FILE_CHUNK_SIZE)
-					if not chunk: break
-					chunks.append(chunk)
+				#deduce type of file
+				file_type = constant.FILE_TYPE_OTHER
 				
-				handle.close()
-				f = servable_file(file_type, name, file_size, path=path, chunks=chunks)
+				dotted = name.split('.')
+				if len(dotted) > 1:
+					#there is at least one dot, so assume the last substring corresponds to the file type
+					suffix = dotted[-1].lower() #make lowercase
+					
+					#TODO: terrible system; should use header inspection instead like the linux "file" command
+					if suffix in ('jpg', 'jpeg', 'png', 'gif', 'tga', 'bmp', 'tiff'): file_type = constant.FILE_TYPE_IMAGE
+					elif suffix in ('mp3', 'wav', 'ogg', 'aac'): file_type = constant.FILE_TYPE_AUDIO
+					elif suffix in ('mp4', 'avi', 'webm'): file_type = constant.FILE_TYPE_VIDEO
 				
-				if f.hash in self.files.keys():
-					time_print("trying to add already stored(in memory) file")
+				
+				self.activity_lock.acquire() #self.others and OutgoingFile existance and state must be atomic relative to threading
+				
+				recipients = self.others.copy() #clone of recipients, at this time #TODO: ensure that others with .missing set are not present at this point in time
+				f = OutgoingFile(file_type, name, file_size, path, time_to_live, self.others.copy())
+				
+				if f.hash in self.outgoing.keys():
+					constant.time_print("trying to add already stored(in memory) file")
 	
 				else:
-					time_print("added file '" + name + "', {" + f.hash.encode('hex') + "}")
-					self.files[f.hash] = f
-					self.files_to_send.append(f)
+					constant.time_print("added " + file_type + " file '" + name + "', {" + f.hash.encode('hex') + "}")
+					self.outgoing[f.hash] = f
+					
+				self.activity_lock.release()
 	
 			except IOError as e:
-				time_print('can\'t open file \'' + path + '\' for reading')
+				constant.time_print('can\'t open file \'' + path + '\' for reading')
 				raise e
-		
-	#let everyone in the network know of our presence, and what we'll serve
-	def send_advertisements(self):
-		print ('sending advertisements for every file')
-	
-		for serv_path in self.files:
-			serv = self.files[serv_path]
-			data = struct.pack('>B', PACKET_TYPE_META)
-			data += file_meta_struct.pack(serv.size, serv.hash, serv.type, serv.thumb.size[0], serv.thumb.size[1], len(serv.name))
-			data += serv.name.encode("utf8")
-			data += serv.thumb.tostring()
-			
-			#send it to everyone
-			self.multicast_sock.sendto(data, (self.group_ip, self.multicast_port))
+				
+				
+	def send_presence(self):
+		constant.time_print("sent presence packet")
+		data = packet.make_presence_packet(self.nick)
+		self.multicast_sock.sendto(data, (constant.MULTICAST_GROUP, constant.MULTICAST_PORT))
+		self.presence_last_sent = time.time()
+				
 
+	#this will listen continuously for incoming packets and handle/reply to them
+	def run(self): 
+		try:
+			self.running = True
+		
+			while self.running:
+				self.activity_lock.acquire() #keep all state changes atomic with respect to threads
+			
+				now = time.time()
+			
+				#are we missing anyone?
+				gone = []
+				for other in self.others:
+					if now - other.last_presence > constant.TIME_TO_MISSING:
+						ohter.missing = True
+						gone.append[other]
+					
+				for left in gone:
+					constant.time_print(self.others[left].name + "(" + left + ") is gone")
+					self.others.remove(left)
+		
+
+				if now - self.presence_last_sent > constant.PRESENCE_INTERVAL:
+					#we're still here
+					self.send_presence()
+			
+			
+				#process acknowledgements first, which are unicast
+				while True: #handle every ack packet in the queue
+					try:
+						data, (addr, port) = self.unicast_sock.recvfrom(constant.UDP_PACKET_SIZE)
+						packet_type = struct.unpack('>B', data[0])
+					
+						if packet_type in (packet.PACKET_TYPE_ACK_META, packet.PACKET_TYPE_ACK_CHUNK, packet.PACKET_TYPE_ACK_DELETE):
+							try:
+								file_hash, chunk_id = ack_struct.unpack(data[1:])
+							
+							except Exception as e:
+								raise BadPacketException(addr)
+							
+							if file_hash in self.outgoing:
+								f = self.files[file_hash]
+								f.got_ack(addr, packet_type, chunk_id)
+								if f.deleted:
+									constant.time_print("successfully delivered file " + f.name)
+									self.outgoing.remove(f)
+								
+						else:
+							raise BadPacketException(addr)
+								
+								
+					except socket.error:
+						#no packet in the queue, sleep for a bit
+						#constant.time_print("no more unicast packets")
+						time.sleep(0.01) #10 milliseconds
+						break
+						
+					except BadPacketException as e:
+						constant.time_print("bad packet from " + e.source)
+						
+		
+				#then handle the multicast packets
+				while True: #handle every packet in the queue
+					try:
+						data, (addr, port) = self.multicast_sock.recvfrom(constant.UDP_PACKET_SIZE)
+						packet_type = struct.unpack('>B', data[0])
+
+						#this peer (still) exists
+						if packet_type == packet.PACKET_TYPE_PRESENCE:
+							constant.time_print("presence packet from " + addr)
+							try:
+								nick_encoded = presence_struct.unpack(data[1:])
+				
+							except Exception as e:
+								raise BadPacketException(addr)
+					
+							nick = nick_encoded.decode('utf8')
+				
+							if addr in self.others:
+								other = self.others[addr]
+
+								other.last_presence = now
+								other.nick = nick
+								other.missing = False #in case they were marked as missing above
+				
+							else:
+								self.others[addr] = OtherPeer(nick)
+			
+			
+						#this peer wants to send us a new file
+						elif packet_type == packet.PACKET_TYPE_META:
+							constant.time_print("meta packet from " + addr)
+							try:
+								file_size, file_hash, file_type, thumb_w, thumb_h, time_to_live, file_name_len = meta_struct.unpack(data[1:])
+								file_name = data[1 + meta_struct.size : 1 + meta_struct.size + file_name_len].decode('utf8')
+								thumb_data = data[1 + meta_struct.size + file_name_len :]
+								thumb = Image.fromstring(thumb_data, (thumb_w, thumb_h))
+				
+							except Exception as e:
+								raise BadPacketException(addr)
+			
+							#add it to the list
+							if file_hash not in self.incoming:
+								self.incoming[file_hash] = servable_file(file_type, file_name, file_size, file_hash, time_to_live, thumb)
+				
+							#send a unicast acknowledgement
+							ack = packet.make_ack_packet(file_hash)
+							self.unicast_sock.sendto(ack, (addr, port))
+				
+		
+						#this peer is giving us another piece of some file
+						elif packet_type == packet.PACKET_TYPE_CHUNK:
+							constant.time_print("chunk packet from " + addr)
+							try:
+								file_hash, chunk_id, chunk_len = chunk_struct.unpack(data[1:])
+								chunk = data[1 + chunk_struct :]
+								assert len(chunk) == chunk_len
+				
+							except Exception as e:
+								raise BadPacketException(addr)
+				
+							if file_hash in self.files:
+								#only keep chunks of files we know of
+								self.incoming[file_hash].add_chunk(chunk_id, chunk)
+					
+								#send an ack to the sender
+								ack = packet.make_ack_packet(file_hash, chunk_id)
+								self.unicast_sock.sendto(ack, (addr, UNICAST_PORT))
+			
+		
+						#this peer  wants us not to have the file anymore
+						elif packet_type == packet.PACKET_TYPE_DELETE:
+							constant.time_print("delete packet from " + addr)
+							try:
+								file_hash = delete_struct.unpack(data[1:])
+							
+							except Exception as e:
+								raise BadPacketException(addr)
+						
+							#there's no point in keeping the file if it's not complete, and if it is complete, be nice, delete it
+							if file_hash in self.incoming:
+								f = self.incoming[file_hash]
+								self.incoming.remove(file_hash)
+							
+							#send ack whether we had file or not, since it could be the case that before we got the metadata, 
+							#the sender wants to delete the file early; also it could be that our first ack was dropped
+							ack = packet.make_ack_packet(file_hash, packet.PACKET_TYPE_ACK_DELETED)
+							self.unicast_sock.sendto(ack, (addr, UNICAST_PORT))
+
+
+						else:
+							raise BadPacketException(addr + " - wrong type") #TODO ugly hack
+						
+						
+					except socket.error:
+						#no packet in the queue, sleep for a bit
+						#constant.time_print("no more multicast packets")
+						time.sleep(0.01) #10 milliseconds
+						break
+						
+					except BadPacketException as e:
+						constant.time_print("bad packet from " + e.source)
+					
+				
+		
+				#send the next packet of every outgoing file
+				for outgoing in self.outgoing.values():
+					data = outgoing.next_packet()
+					if data is not None: self.multicast_sock.sendto(data, (self.group_ip, self.multicast_port))
+				
+			
+				#see if we need to delete any incoming file
+				deleting = []
+				for incoming in self.incoming.values():
+					if incoming.completed:
+						if now - incoming.completed_at > imcoming.ttl:
+							deleting.push(incomfing.hash)
+						
+					
+				self.activity_lock.release() #keep all state changes atomic with respect to threads
+				time.sleep(0.01) #TODO I think this is needed to allow the other thread to acquire the lock, but I might be wrong
+			
+		except SystemExit:
+			pass
+					
+	def kill(self):
+		self.activity_lock.acquire()
+		self.running = False
+		self.activity_lock.release()
+
+
+def signal_handler(signal, frame):
+	print("hard shutdown")
+	os._exit(1)
 
 if __name__ == '__main__':
 	#the program is being invoked directly (rather than being imported as library)
-	import sys
+	
+	signal.signal(signal.SIGINT, signal_handler) #*nix
+	#signal.signal(signal.CTRL_C_EVENT, signal_handler) #windoze
+	
 	if len(sys.argv) == 2:
-		uploads_dir = sys.argv[1]
+		donwloads_dir = sys.argv[1]
 		
-		peer = peer(MULTICAST_GROUP, MULTICAST_PORT)
-		others = dict() #ip string => other object
+		peer = Peer('magic')
+		peer.start() #spawn network thread
 		
-		#gather all the files that can be served
-		for f in os.listdir(uploads_dir):
-			if os.path.isfile(f):
-				peer.add_local_file(f)
-				
-		#peer.send_advertisements()
-		
-		
-		#TODO: maybe object orient this whole block, maybe into peer
-		while True:
-			data, addr = peer.multicast_sock.recvfrom(65535)
-			type = struct.unpack('>B', data[0])
+		#basic console
+		while True: 
+			try:
+				line = raw_input('>')
 			
-			if type == PACKET_TYPE_META:
-				try:
-					size, hash, type, thumb_w, thumb_h, name_len = file_meta_struct.unpack(data[1:])
-					name = data[1 + file_meta_struct.size : 1 + file_meta_struct.size + name_len].decode('utf8')
-					thumb_data = data[1 + file_meta_struct.size + name_len :]
-					thumb = Image.fromstring(thumb_data)
+				tokens = line.split(' ')
+				command = tokens[0].lower()
+				
+				print (command)
+			
+				if command == 'kill':
+					peer.kill()
+					print("goodbye")
+					break
 					
-				except Exception as e:
-					time_print("failed to unpack packet: " + e.message)
-				
-				if hash in peer.files:
-					peer.files[hash].update_info(type, hash, name, thumb)
-				
-				else:
-					f = servable_file(type, name, size, hash=hash, thumb=thumb)
+				elif command == 'peers':
+					if len(peer.others) > 0:
+						for addr in peer.others:
+							print(peer.others[addr].nick + "(" + addr + ")")
+							
+					else:
+						print("all alone")
 					
-			
-			elif type == PACKET_TYPE_CHUNK:
-				try:
-					hash, chunk_id, chunk_len = file_chunk_struct.unpack(data[1:])
-					chunk = data[1 + file_chunk_struct :]
-					assert len(chunk) == chunk_len
+				
+				elif command == 'send':
+					path = tokens[1]
+					ttl = int(tokens[2])
+					peer.add_file_to_send(path)
 					
-				except Exception as e:
-					time_print("failed to unpack packet: " + e.message)
+				elif command == 'help':
+					print("kill - end the progrma")
+					print("peers - list known peers")
+					print("send <path> <ttl in seconds> - send a file to all known peers")
 					
-				if hash in peer.files:
-					#only keep chunks of files we know of
-					peer.files[hash].add_chunk(chunk_id, chunk)
-				
+				else: raise Exception()
 			
-			elif type == PACKET_TYPE_NO_MORE:
-				time_print("no more packet from " + addr)
-			
-			
-			elif type == PACKET_TYPE_REQUEST:
-				try:
-					hash, chunk_id = file_request_struct.unpack(data[1:])
-				
-				except Exception as e:
-					time_print("failed to unpack packet: " + e.message)
-				
-				if hash in peer.files:
-					#see if we have the chunk in question and send it
-					f = peer.files[hash]
-					if chunk_id < len(f.chunks):
-						if f.chunks[chunk_id] is not None:
-							packet = str(PACKET_TYPE_CHUNK)
-							packet += file_chunk_struct.pack(hash, chunk_id, f.chunks[chunk_id])
-							peer.multicast_sock.sendto(packet, (peer.group_ip, peer.multicast_port))
-				
-			
-			else:
-				time_print("received packet with invalid type")
-				
-				
-			#if there are any imcomplete files, send requests
-			for incomplete in peer.files_to_get:
-				for chunk_id in range(len(incomplete.chunks)):
-					if incomplete.chunks[chunk_id] is None:
-						packet = str(PACKET_TYPE_REQUEST)
-						packet += file_request_struct(incomplete.hash, chunk_id)
-						break #only send a request for the first missing chunk; TODO: is it too much traffic to not have this?
-			
-			#TODO: if there are any files added, send them anyway, once only (rather than the advertisement system)
-			
-			
-			
+			except Exception as e:
+				print('badly formed command; ' + e.message)
+				pass
 	
 	else:
-		print("usage: " + sys.argv[0] + " <uploads dir>")
+		print("usage: " + sys.argv[0] + " <downloads dir>")
 
