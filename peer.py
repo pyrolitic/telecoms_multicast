@@ -26,8 +26,9 @@ class OtherPeer:
 		self.missing = False
 
 class BadPacketException(Exception):
-	def __init__(self, source):
+	def __init__(self, source, exception=None):
 		self.source = source
+		self.reason = exception.message if exception else ''
 		Exception.__init__(self, "received packet that could not be decoded")
 
 #peer running on this computer; there should only be one instance of this
@@ -159,10 +160,10 @@ class Peer(threading.Thread):
 				
 					if packet_type in (packet.PACKET_TYPE_ACK_META, packet.PACKET_TYPE_ACK_CHUNK, packet.PACKET_TYPE_ACK_DELETE):
 						try:
-							file_hash, chunk_id = ack_struct.unpack(data[1:])
+							file_hash, chunk_id = packet.ack_struct.unpack(data[1:])
 						
 						except Exception as e:
-							raise BadPacketException(addr)
+							raise BadPacketException(addr, e)
 						
 						if file_hash in self.outgoing:
 							f = self.files[file_hash]
@@ -197,11 +198,11 @@ class Peer(threading.Thread):
 					if packet_type == packet.PACKET_TYPE_PRESENCE:
 						constant.time_print("presence packet from " + addr)
 						try:
-							nick_encoded_len = presence_struct.unpack(data[1 : presence_struct.size + 1])
+							nick_encoded_len = packet.presence_struct.unpack(data[1 : presence_struct.size + 1])
 							nick = data[presence_struct.size + 1 :].decode('utf8')
 			
 						except Exception as e:
-							raise BadPacketException(addr)
+							raise BadPacketException(addr, e)
 			
 						if addr in self.others:
 							other = self.others[addr]
@@ -228,7 +229,7 @@ class Peer(threading.Thread):
 							thumb = Image.fromstring(thumb_data, (thumb_w, thumb_h))
 			
 						except Exception as e:
-							raise BadPacketException(addr)
+							raise BadPacketException(addr, e)
 		
 						#add it to the list
 						if file_hash not in self.incoming:
@@ -248,7 +249,7 @@ class Peer(threading.Thread):
 							assert len(chunk) == chunk_len
 			
 						except Exception as e:
-							raise BadPacketException(addr)
+							raise BadPacketException(addr, e)
 			
 						if file_hash in self.files:
 							#only keep chunks of files we know of
@@ -266,7 +267,7 @@ class Peer(threading.Thread):
 							file_hash = delete_struct.unpack(data[1:])
 						
 						except Exception as e:
-							raise BadPacketException(addr)
+							raise BadPacketException(addr, e)
 					
 						#there's no point in keeping the file if it's not complete, and if it is complete, be nice, delete it
 						if file_hash in self.incoming:
@@ -290,7 +291,7 @@ class Peer(threading.Thread):
 					break
 					
 				except BadPacketException as e:
-					constant.time_print("bad packet from " + e.source)
+					constant.time_print("bad packet from " + e.source + "; " + e.reason)
 				
 			
 	
