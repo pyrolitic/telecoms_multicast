@@ -23,7 +23,8 @@ class OtherPeer:
 	def __init__(self, nick):
 		self.nick = nick
 		self.last_presence = time.time() #now
-		self.missing = False
+		self.missing = False #whether it has timed out
+		
 
 class BadPacketException(Exception):
 	def __init__(self, source, exception=None):
@@ -139,11 +140,11 @@ class Peer(threading.Thread):
 				other = self.others[addr]
 				if now - other.last_presence > constant.TIME_TO_MISSING:
 					other.missing = True
-					gone.appen(other)
+					gone.append(addr)
 				
-			for left in gone:
-				constant.time_print(self.others[left].name + "(" + left + ") left")
-				self.others.remove(left)
+			for addr in gone:
+				constant.time_print(self.others[addr].nick + "(" + addr + ") left")
+				del self.others[addr]
 	
 
 			if now - self.presence_last_sent > constant.PRESENCE_INTERVAL:
@@ -171,7 +172,7 @@ class Peer(threading.Thread):
 							f.got_ack(addr, packet_type, chunk_id)
 							if f.deleted:
 								constant.time_print("successfully delivered file " + f.name)
-								self.outgoing.remove(f)
+								del self.outgoing[file_hash]
 					
 					else:
 						raise BadPacketException(addr)
@@ -209,7 +210,7 @@ class Peer(threading.Thread):
 							f.got_ack(addr, packet_type, chunk_id)
 							if f.deleted:
 								constant.time_print("successfully delivered file " + f.name)
-								self.outgoing.remove(f)
+								del self.outgoing[file_hash]
 								
 
 					#this peer (still) exists
@@ -290,8 +291,7 @@ class Peer(threading.Thread):
 					
 						#there's no point in keeping the file if it's not complete, and if it is complete, be nice, delete it
 						if file_hash in self.incoming:
-							f = self.incoming[file_hash]
-							self.incoming.remove(file_hash)
+							del self.incoming[file_hash]
 						
 						#send ack whether we had file or not, since it could be the case that before we got the metadata, 
 						#the sender wants to delete the file early; also it could be that our first ack was dropped
@@ -317,7 +317,8 @@ class Peer(threading.Thread):
 			#send the next packet of every outgoing file
 			for outgoing in self.outgoing.values():
 				data = outgoing.next_packet()
-				if data is not None: self.multicast_sock.sendto(data, (self.group_ip, self.multicast_port))
+				if data is not None:
+					self.multicast_sock.sendto(data, (constant.MULTICAST_GROUP, constant.MULTICAST_PORT))
 			
 		
 			#see if we need to delete any incoming file
@@ -330,7 +331,7 @@ class Peer(threading.Thread):
 			for file_hash in deleting:
 				f = self.incoming[file_hash]
 				constant.time_print("deleting file " + f.name)
-				self.incoming.remove(file_hash)
+				del self.incoming[file_hash]
 					
 				
 			self.activity_lock.release() #keep all state changes atomic with respect to threads
@@ -388,7 +389,7 @@ if __name__ == '__main__':
 				elif command == 'send':
 					path = tokens[1]
 					ttl = int(tokens[2])
-					peer.add_file_to_send(path)
+					peer.add_file_to_send(path, ttl)
 					
 				elif command == 'help':
 					print("kill - end the progrma")

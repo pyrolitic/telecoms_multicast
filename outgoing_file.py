@@ -1,5 +1,5 @@
 #libraries
-from PIL import Image #thumbnailering
+from PIL import Image #thumbnailing
 import random #for picking recipients at random
 import time
 
@@ -21,9 +21,10 @@ class OutgoingFile(ProtoFile):
 		self.content_sent = False #whether every receiver has acknowledged every chunk
 		self.deleted = False #whether every recipient has acknowledged deleting the file
 		
+		self.meta_began_at = None #roundabouts when the transmission started
 		self.content_began_at = None #when the first content packet was sent
 		self.delete_request_began_at = None #when the user requested the early deletion
-		self.meta_began_at = None #roundabouts when the transmission started
+		self.content_sent_at = None #when the last content ack(in the sense of the last missing chunk having been ack'd) arrived at, marking the latest possible start of a lifetime of a copy of this file
 		
 		self.meta_acks = set()# recipient address(string) of peer that has not acknowledged the metadata packet
 		self.content_acks = dict() #recipient address(string) of peer => array of unacknowledged packets, of length > 0
@@ -68,14 +69,31 @@ class OutgoingFile(ProtoFile):
 		for addr in self.recipients:
 			r = self.recipients[addr]
 			if r.missing:
-				if addr in self.meta_acks: self.meta_acks.remove(addr)
-				if addr in self.content_acks: self.content_acks.remove(addr)
-				if addr in self.delete_acks: self.delete_acks.remove(addr)
+				constant.time_print("lost recipient " + r.nick)
+				if addr in self.meta_acks: 
+					del self.meta_acks[addr]
+					if len(self.meta_acks) == 0:
+						self.message("the last peer we were waiting on to send to send us a meta ack has timed out")
+						self.meta_send = True
+					
+				if addr in self.content_acks: 
+					del self.content_acks[addr]
+					if len(self.content_acks) == 0:
+						self.message("the last peer we were waiting on to send to send us a content ack has timed out")
+						self.content_sent = True
+						self.content_sent_at = time.time()
+					
+				if addr in self.delete_acks: 
+					del self.delete_acks[addr]
+					if len(self.content_acks) == 0:
+						self.message("the last peer we were waiting on to send to send us a delete ack has timed out")
+						self.deleted = True
+					
 				gone.append(addr)
 		
 		for addr in gone:
+			self.message("recipient" + addr + " timed out")
 			self.recipients.remove(addr)
-		
 		
 		data = None
 		
