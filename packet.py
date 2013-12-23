@@ -13,9 +13,10 @@ PACKET_TYPE_ACK_META = 4 #acknowledgement for file metadata
 PACKET_TYPE_ACK_CHUNK = 5 #acknowledgement for a content chunk
 PACKET_TYPE_ACK_DELETE = 6 #acknowledgement having deleted a file
 
+PACKET_TYPE_NAMES = ('presence', 'metadata', 'chunk', 'deletion', 'ack_metadata', 'ack_chunk', 'ack_delete')
+
 
 #codec objects for the different types of packets. all types are unsigned
-
 packet_type_struct = struct.Struct('>B')
 
 #type must be PACKET_TYPE_PRESENCE

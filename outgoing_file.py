@@ -71,7 +71,7 @@ class OutgoingFile(ProtoFile):
 			if r.missing:
 				constant.time_print("lost recipient " + r.nick)
 				if addr in self.meta_acks: 
-					del self.meta_acks[addr]
+					self.meta_acks.remove(addr)
 					if len(self.meta_acks) == 0:
 						self.message("the last peer we were waiting on to send to send us a meta ack has timed out")
 						self.meta_send = True
@@ -84,7 +84,7 @@ class OutgoingFile(ProtoFile):
 						self.content_sent_at = time.time()
 					
 				if addr in self.delete_acks: 
-					del self.delete_acks[addr]
+					self.delete_acks.remove(addr)
 					if len(self.content_acks) == 0:
 						self.message("the last peer we were waiting on to send to send us a delete ack has timed out")
 						self.deleted = True

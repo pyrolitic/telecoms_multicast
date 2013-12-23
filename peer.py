@@ -153,7 +153,8 @@ class Peer(threading.Thread):
 						data, (addr, _) = self.multicast_sock.recvfrom(constant.UDP_PACKET_SIZE) #the function returns (data, (addr, port)), but port is not needed
 						packet_type = ord(data[0])
 						
-						constant.time_print("received packet with type " + str(packet_type))
+						nick = self.others[addr].nick if addr in self.others else ''
+						constant.time_print("received " + packet.PACKET_TYPE_NAMES[packet_type] + " from " + nick + '(' + addr + ')')
 						
 						#acknowledgements
 						if packet_type in (packet.PACKET_TYPE_ACK_META, packet.PACKET_TYPE_ACK_CHUNK, packet.PACKET_TYPE_ACK_DELETE):
@@ -173,7 +174,6 @@ class Peer(threading.Thread):
 	
 						#this peer (still) exists
 						elif packet_type == packet.PACKET_TYPE_PRESENCE:
-							constant.time_print("presence packet from " + addr)
 							try:
 								nick_encoded_len = packet.presence_struct.unpack(data[1 : 1 + packet.presence_struct.size])[0] #[0] needed cause it's a one-tuple
 								nick_encoded = data[1 + packet.presence_struct.size:]
@@ -200,12 +200,11 @@ class Peer(threading.Thread):
 			
 						#this peer wants to send us a new file
 						elif packet_type == packet.PACKET_TYPE_META:
-							constant.time_print("meta packet from " + addr)
 							try:
 								file_size, file_hash, file_type, thumb_w, thumb_h, time_to_live, file_name_len = packet.meta_struct.unpack(data[1 : packet.meta_struct.size + 1])
 								file_name = data[1 + packet.meta_struct.size : 1 + packet.meta_struct.size + file_name_len].decode('utf8')
 								thumb_data = data[1 + packet.meta_struct.size + file_name_len :]
-								thumb = Image.fromstring(thumb_data, (thumb_w, thumb_h))
+								thumb = Image.fromstring('RGBA', thumb_data, (thumb_w, thumb_h))
 				
 							except Exception as e:
 								raise BadPacketException(addr, e)
@@ -221,7 +220,6 @@ class Peer(threading.Thread):
 		
 						#this peer is giving us another piece of some file
 						elif packet_type == packet.PACKET_TYPE_CHUNK:
-							constant.time_print("chunk packet from " + addr)
 							try:
 								file_hash, chunk_id, chunk_len = packet.chunk_struct.unpack(data[1 : packet.chunk_struct.size + 1])
 								chunk = data[1 + packet.chunk_struct :]
@@ -241,7 +239,6 @@ class Peer(threading.Thread):
 		
 						#this peer  wants us not to have the file anymore
 						elif packet_type == packet.PACKET_TYPE_DELETE:
-							constant.time_print("delete packet from " + addr)
 							try:
 								file_hash = packet.delete_struct.unpack(data[1:])[0]
 							
@@ -265,7 +262,7 @@ class Peer(threading.Thread):
 					except socket.error:
 						#no packet in the queue, sleep for a bit
 						#constant.time_print("no more multicast packets")
-						time.sleep(0.01) #10 milliseconds
+						time.sleep(2.01) #10 milliseconds
 						break
 						
 					except BadPacketException as e:
@@ -274,10 +271,25 @@ class Peer(threading.Thread):
 				
 		
 				#send the next packet of every outgoing file
+				deleting = []
 				for outgoing in self.outgoing.values():
 					data = outgoing.next_packet()
 					if data is not None:
 						self.multicast_sock.sendto(data, (constant.MULTICAST_GROUP, constant.MULTICAST_PORT))
+					
+					else:
+						#the file has not packets to send right now, see if we should get rid the of it
+						if not outgoing.deletion_request:
+							if outgoing.content_sent and now - outgoing.content_sent_at > outgoing.ttl:
+								#the last recipient should have deleted the file by now
+								deleting.append(outgoing.hash)
+									
+						elif outgoing.deleted:
+							#everyone acknowledged having deleted the file on our request
+							deleting.append(outgoing.hash)
+						
+				for file_hash in deleting:
+					del self.outgoing[file_hash]
 				
 			
 				#see if we need to delete any incoming file
@@ -302,7 +314,7 @@ class Peer(threading.Thread):
 #runs on ^C
 def signal_handler(signal, frame):
 	print("hard shutdown")
-	os._exit(1)
+	os._exit(1) #supposedly pretty dangerous
 
 
 if __name__ == '__main__':
@@ -317,10 +329,11 @@ if __name__ == '__main__':
 		peer = Peer('blank')
 		peer.start() #spawn network thread
 		
-		#basic console
+		#basic console. sadly it clashes with the debug output
 		while True: 
 			try:
 				line = raw_input('>')
+				if len(line) == 0: continue
 			
 				tokens = line.split(' ')
 				command = tokens[0].lower()

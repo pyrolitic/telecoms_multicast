@@ -1,15 +1,20 @@
+This a system of distribution of files over a local network, using UDP multicast sockets for efficient one-to-many transmissions. It does not require a server. Every participant is a peer.
 
 \section{Network membership}
 Every peer maintains a list of known members at every instant.
 In order to let the other peers know that a new peer has joined the network, a small presence packet is sent to every other peer. The packet contains a nickname for the peer, that cannot be longer than 30 characters. When received by the other peers, they each add the new peer to their list, and keep track of when it was they received the last presence packet. The presence packet is sent periodically (every 200 ms) by each peer for their entire lifespan. If a peer's presence was announced not more recently than 10 seconds ago, they are thought to have left the network, and are deleted from the know peers list.
 
 \section{File distribution}
-A file starts on the disk of the sending peer. It is read in whole and divided into chunks. Its relevant metadata is the file name, size, type, content hash and time to live (picked by the user, not stored in the file). A snaphot of the list of known peers is stored. The metadata is sent to all the members in the list of the network. When every known member acknowledges the metadata, every chunk is sent until each one is acknowledged by every peer(in the snapshot; other members might have joined since then). 
+A file starts on the disk of the sending peer. It is read in whole and divided into chunks. Its relevant metadata is the file name, size, type, content hash and time to live (picked by the user, not stored in the file). A snaphot of the list of known peers is stored. The metadata is sent to all the members in the list of the network. When every known member acknowledges the metadata, every chunk is sent until each one is acknowledged by every peer(in the snapshot; other members might have joined since then, and they don't get to have the file).
 
-The "life" of a distributed file on a peer's client starts when it was fully received. The time this happens can be different for each peer, since different peers can have different chances of dropping packets. Each peer must delete its copy of the file when the time is (arrived_at + file.ttl). For this reason, in case the distributing peer does not want to prematurely stop the distribution of the file, the receiving peers do not have to send deletion acknowledgement packets when they have deleted the file, because they each know the ttl of the file and can delete the file at the appropriate time.
+There are three lists of current recipients, for metadata, chunks(content) and deletion acknowledgements, which contain which packets were not acknowledged yet(even if the packets weren't even sent). If a recipient times out, it is excluded from the transmission and deleted from the lists.
+
+The "life" of a distributed file on a peer's client starts when it was fully received. The time this happens can be different for each recipient, since different peers can have different chances of dropping packets. Each recipient must delete its copy of the file when the time is arrived_at + ttl. For this reason, in case the distributing peer does not want to prematurely stop the distribution of the file, the receiving peers do not have to send deletion acknowledgement packets when they have deleted the file, because they each know the ttl of the file and so they can delete it at the right time.
+
+When all the chunks of a file are received, their hash in computed and compared to the one from the metadata. The latter is assumed to be correct, so if the hashes do not match, the content is thought to be erronous, 
 
 At any point, from the start of the transmission of metadata, the user might change their mind and wish to stop sending the file and have it deleted from the peers. The peer sends a deletion request to every member of the list, repeatedly, until they each acknowledge having deleted their copy of the file, partial or complete. The file is then removed from the peer's internal storage, but not the disk.
 
 
 \subsection{File chunks}
-During distribution, files are sent as chunks, which are as large as possible (arond 63kb). The system thus largely relies on level 2 packet reassembly and error detection to drop incorrect packets.
+During distribution, files are sent as chunks, which are as large as possible (arond 63kb). The system thus largely relies on level 2 packet reassembly and error detection to drop incorrect packets. If the layout of a packet is corrent, an error in the payload of an individual chunk packet cannot be detected.
