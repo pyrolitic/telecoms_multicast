@@ -16,8 +16,8 @@ NICK_NAME_LONGEST = 30
 UDP_PACKET_SIZE = 65535 - 8 - 20
 
 #in seconds, the two should best be coprime
-TIME_TO_MISSING = 11
-PRESENCE_INTERVAL = 4 #0.2
+TIME_TO_MISSING = 3
+PRESENCE_INTERVAL = 0.2
 
 
 #TODO: awkward place for this to be in
