@@ -34,8 +34,9 @@ class BadPacketException(Exception):
 
 #peer running on this computer; there should only be one instance of this
 class Peer(threading.Thread):
-	def __init__(self, nickname):
+	def __init__(self, download_dir, nickname):
 		threading.Thread.__init__(self)
+		self.downloads_dir = download_dir
 		self.nick = nickname
 	
 		self.multicast_sock = None
@@ -249,6 +250,7 @@ class Peer(threading.Thread):
 							#add it to the list
 							if file_hash not in self.incoming:
 								self.incoming[file_hash] = IncomingFile(file_type, file_name, file_size, file_hash, time_to_live, thumb)
+								self.incoming[file_hash].message("new file")
 				
 							#send a unicast acknowledgement
 							ack = packet.make_ack_packet(file_hash, packet.PACKET_TYPE_ACK_META)
@@ -259,13 +261,13 @@ class Peer(threading.Thread):
 						elif packet_type == packet.PACKET_TYPE_CHUNK:
 							try:
 								file_hash, chunk_id, chunk_len = packet.chunk_struct.unpack(data[1 : packet.chunk_struct.size + 1])
-								chunk = data[1 + packet.chunk_struct :]
+								chunk = data[packet.chunk_struct.size + 1 :]
 								assert len(chunk) == chunk_len
 				
 							except Exception as e:
 								raise BadPacketException(addr, e)
 				
-							if file_hash in self.files:
+							if file_hash in self.incoming:
 								#only keep chunks of files we know of
 								self.incoming[file_hash].add_chunk(chunk_id, chunk)
 					
@@ -333,11 +335,17 @@ class Peer(threading.Thread):
 				for incoming in self.incoming.values():
 					if incoming.complete:
 						if now - incoming.completed_at > incoming.ttl:
-							deleting.push(incoming.hash)
+							deleting.append(incoming.hash)
+							
+						else:
+							if not incoming.saved:
+								incoming.message("successfully received all chunks; saving. we can have it for " + str(incoming.ttl) + " seconds")
+								incoming.write_to_disk(self.downloads_dir)
 							
 				for file_hash in deleting:
 					f = self.incoming[file_hash]
-					constant.time_print("deleting file " + f.name)
+					f.message("deleting")
+					os.remove(f.path)
 					del self.incoming[file_hash]
 					
 						
@@ -361,9 +369,9 @@ if __name__ == '__main__':
 	#signal.signal(signal.CTRL_C_EVENT, signal_handler) #windoze
 	
 	if len(sys.argv) == 2:
-		donwloads_dir = sys.argv[1]
+		downloads_dir = sys.argv[1]
 		
-		peer = Peer('blank')
+		peer = Peer(downloads_dir, 'blank')
 		peer.start() #spawn network thread
 		
 		#basic console. sadly it clashes with the debug output

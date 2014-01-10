@@ -32,7 +32,7 @@ class OutgoingFile(ProtoFile):
 		
 		self.deletion_request = False #whether the time to live of the file has ended, or the user wants to delete it early
 		
-		self.last_ack_at = None #when was the last ack received 
+		self.last_packet_at = None #when was the last ack received 
 		
 		for r in recipients:
 			self.meta_acks.add(r)
@@ -96,11 +96,14 @@ class OutgoingFile(ProtoFile):
 			self.message("recipient" + addr + " timed out")
 			del self.recipients[addr]
 		
-		data = None
 		
-		if self.last_ack_at is not None:
-			if time.time() - self.last_ack_at < constant.FILE_PACKET_INTERVAL:
-				return None #don't flood the network with packets from this file 
+		
+		#don't flood the network with packets from this file
+		if self.last_packet_at is not None:
+			if time.time() - self.last_packet_at < constant.FILE_PACKET_INTERVAL:
+				return None 
+			
+		data = None
 		
 		if self.deletion_request:
 			if not self.deleted:
@@ -117,6 +120,8 @@ class OutgoingFile(ProtoFile):
 				chunk_id = self.content_acks[key][0] #send the first 
 				data = packet.make_chunk_packet(self.hash, chunk_id, self.chunks[chunk_id])
 		
+		if data is not None: 
+			self.last_packet_at = time.time()
 			
 		return data
 		
@@ -127,7 +132,7 @@ class OutgoingFile(ProtoFile):
 		
 		
 	def got_ack(self, addr, packet_type, chunk_id):
-		self.last_ack_at = time.time()
+		self.last_packet_at = time.time()
 		
 		if packet_type == packet.PACKET_TYPE_ACK_META:
 			if addr in self.meta_acks:
@@ -138,9 +143,14 @@ class OutgoingFile(ProtoFile):
 				
 		elif packet_type == packet.PACKET_TYPE_ACK_CHUNK:
 			if addr in self.content_acks:
-				self.content_acks[addr].remove(chunk_id)
-				if len(self.content_acks[addr]) == 0: self.content_acks.remove(addr) #this peer has acknowledged every chunk
-				if len(self.content_acks) == 0: self.content_sent = True
+				if chunk_id in self.content_acks[addr]:
+					self.content_acks[addr].remove(chunk_id)
+					if len(self.content_acks[addr]) == 0: 
+						del self.content_acks[addr] #this peer has acknowledged every chunk
+						
+						if len(self.content_acks) == 0: 
+							self.content_sent = True
+							self.content_sent_at = time.time()
 		
 		elif packet_type == packet.PACKET_TYPE_ACK_DELETE:
 			if addr in self.content_acks:

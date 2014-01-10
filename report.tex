@@ -67,10 +67,14 @@ In every outgoing file, there are three lists of current recipients: for metadat
 
 After every recipient has acknowledged the metadata packet (or timed out), every time the file is queried for a packet, it picks a recipient at random that has unacknowledged packets, and generates a chunk packet for the first unacknowledged chunk of that recipient.
 
+Metadata and chunk packets are sent through the multicast socket, so they can be received by every recipient.
+
 \subsubsection{Reception}
 When a metadata packet is received, an IncomingFile object is created with the data from packet, and it is added to the list of incoming files.
 
 When all the chunks of a file are received, their hash in computed and compared to the one from the metadata. The latter is assumed to be correct, so if the hashes do not match, the content is thought to be erronous, and the file is discarded.
+
+Acknowledgement packets are sent through a unicast socket, since only the sender needs to know about them.
 
 \subsection{Drawbacks}
 If a file is completely received, and a single chunk is incorrect, causing the hash not to match the metadata hash, it cannot be salvaged and is dropped entirely. A possible solution would be to send a partial checksum along with every chunk packet, so that the recipient will know was the first erronous chunk it received, and then send negative acknowledgements for every packet after that.

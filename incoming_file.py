@@ -1,3 +1,5 @@
+import time
+
 #own files
 from proto_file import ProtoFile
 
@@ -10,7 +12,9 @@ class IncomingFile(ProtoFile):
 		self.hash = file_hash
 		self.thumb = thumbnail
 		self.complete = False #all chunks are None
-		self.complete_at = None #when it was completed and the user could see it
+		self.completed_at = None #when it was completed and the user could see it
+		self.saved = False #whether it was saved after being completed
+		self.error = False #whether there's an error (like mismatching content hash), and the file should be deleted
 		
 	
 	#chunk was downloaded, so add it to the list
@@ -19,8 +23,9 @@ class IncomingFile(ProtoFile):
 			if chunk_id >= 0 and chunk_id < len(self.chunks):
 				if self.chunks[chunk_id] is None:
 					self.chunks[chunk_id] = chunk
-					if all(self.chunks): #every chunk is not None; TODO: replace this with a counter, cause it's O(n)
+					if all(self.chunks): #every chunk is not None
 						self.complete = True
+						self.completed_at = time.time()
 
 				else:
 					if self.chunks[chunk_id] == chunk:
@@ -51,21 +56,25 @@ class IncomingFile(ProtoFile):
 				if content_got_hash == self.hash:
 					self.path = dest_dir + '/' + self.name
 					try:
-						handle = open(self.path, 'wb')
+						self.handle = open(self.path, 'wb')
 
 						for chunk in self.chunks:
-							handle.write(chunk)
+							self.handle.write(chunk)
 
-						handle.close()
+						self.handle.close()
 						self.message("wrote downloaded file " + self.name)
+						self.saved = True
 
 					except Exception as e:
 						self.message("error: could not write data to path " + self.path)
+						self.error = True
 						raise e
 
 				else:
 					self.message("error: hash of content(" + content_got_hash.encode('hex') + "does not match the given hash")
+					self.error = True
 
 			else:
 				self.message("error: size of content of does not match the given size")
+				self.error = True
 

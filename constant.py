@@ -17,10 +17,10 @@ UDP_PACKET_SIZE = 65535 - 8 - 20
 
 #in seconds, the two should best be coprime
 TIME_TO_MISSING = 30
-PRESENCE_INTERVAL = 11
+PRESENCE_INTERVAL = 5
 
 #minimum interval between packets(all kinds) sent from a certain file 
-FILE_PACKET_INTERVAL = 0.1
+FILE_PACKET_INTERVAL = 2
 
 #TODO: awkward place for this to be in
 import time, math

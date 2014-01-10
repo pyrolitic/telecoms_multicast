@@ -35,6 +35,6 @@ class ProtoFile:
 
 	#@<name>(hash): <message>, for a common template
 	def message(self, string):
-		constant.time_print("@" + self.name + ' {' + self.hash.encode('hex') + "}: " + string)
+		constant.time_print("@" + self.name + ' {' + self.hash.encode('hex') + "}:\n\t" + string)
 
 
