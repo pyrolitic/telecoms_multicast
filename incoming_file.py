@@ -5,7 +5,7 @@ from proto_file import ProtoFile
 class IncomingFile(ProtoFile):
 	#                  number,    string,    number,    string,    number,       PIL.Image
 	def __init__(self, file_type, file_name, file_size, file_hash, time_to_live, thumbnail):
-		ProtoFile(self, file_type, file_name, file_size, time_to_live)
+		ProtoFile.__init__(self, file_type, file_name, file_size, time_to_live)
 		
 		self.hash = file_hash
 		self.thumb = thumbnail

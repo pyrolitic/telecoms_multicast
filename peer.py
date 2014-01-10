@@ -38,6 +38,25 @@ class Peer(threading.Thread):
 		threading.Thread.__init__(self)
 		self.nick = nickname
 	
+		self.multicast_sock = None
+		self.unicast_sock = None
+	
+		self.outgoing = dict() #hash(string) => files being sent and/or still alive (OutgoingFile)
+		self.incoming = dict() #hash(string) => files being received and/or still alive (IncomingFile)
+		
+		self.presence_last_sent = None #when the last presence packet was sent
+		
+		#threading, synchronization
+		self.running = False
+		self.activity_lock = threading.Lock()
+		
+		self.others = dict() #address(string) => OtherPeer
+		
+		self.init_socket() #"connect" to the network
+		self.send_presence() #if nothing above threw an error, we can safely say we're present in the network
+		
+		
+	def init_socket(self):
 		self.multicast_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP) #udp datagram over ip
 		self.multicast_sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 1) #one hop only, which limits it to the local network
 		self.multicast_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1) #http://stackoverflow.com/questions/14388706/socket-options-so-reuseaddr-and-so-reuseport-how-do-they-differ-do-they-mean-t
@@ -51,18 +70,6 @@ class Peer(threading.Thread):
 		
 		self.unicast_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP) #also create a socket that's used for one-to-one sending
 		self.unicast_sock.setblocking(0) #same as the other socket
-	
-		self.outgoing = dict() #hash(string) => files being sent and/or still alive (OutgoingFile)
-		self.incoming = dict() #hash(string) => files being received and/or still alive (IncomingFile)
-		
-		self.presence_last_sent = None #when the last presence packet was sent
-		
-		#threading, synchronization
-		self.running = False
-		self.activity_lock = threading.Lock()
-		
-		self.others = dict() #address(string) => OtherPeer
-		self.send_presence() #if nothing above threw an error, we can safely say we're present in the network
 		
 
 	def add_file_to_send(self, path, time_to_live):
@@ -107,17 +114,44 @@ class Peer(threading.Thread):
 		
 					else:
 						constant.time_print("added " + constant.FILE_TYPE_NAMES[file_type] + " file '" + name + "', {" + f.hash.encode('hex') + "}")
+						print("sending to:")
+						for addr in recipients:
+							print(recipients[addr].nick + "(" + addr + ")")
+							
 						self.outgoing[f.hash] = f
 	
 			except IOError as e:
 				constant.time_print('can\'t open file \'' + path + '\' for reading')
 				raise e
-				
+			
+	def send_multicast(self, data):
+		#nonblocking sending can fail if the sending buffer is full
+		while True:
+			try:
+				self.multicast_sock.sendto(data, (constant.MULTICAST_GROUP, constant.MULTICAST_PORT))
+				break
+			
+			except:
+				constant.time_print("eagain multicast")
+				time.sleep(0.1)
+				#EAGAIN most likely
+
+	def send_unicast(self, addr, data):
+		#nonblocking sending can fail if the sending buffer is full
+		while True:
+			try:
+				self.unicast_sock.sendto(data, (addr, constant.MULTICAST_PORT))
+				break
+			
+			except:
+				constant.time_print("eagain unicast")
+				time.sleep(0.1)
+				#EAGAIN most likely
 				
 	def send_presence(self):
 		#constant.time_print("sent presence packet")
 		data = packet.make_presence_packet(self.nick)
-		self.multicast_sock.sendto(data, (constant.MULTICAST_GROUP, constant.MULTICAST_PORT))
+		self.send_multicast(data)
 		self.presence_last_sent = time.time()
 		
 
@@ -165,11 +199,14 @@ class Peer(threading.Thread):
 								raise BadPacketException(addr, e)
 							
 							if file_hash in self.outgoing:
-								f = self.files[file_hash]
+								f = self.outgoing[file_hash]
 								f.got_ack(addr, packet_type, chunk_id)
 								if f.deleted:
 									constant.time_print("successfully delivered file " + f.name)
 									del self.outgoing[file_hash]
+							
+							else:
+								constant.time_print("received meta ack for file{" + file_hash.encode("hex") + "} we're not serving")
 									
 	
 						#this peer (still) exists
@@ -201,10 +238,10 @@ class Peer(threading.Thread):
 						#this peer wants to send us a new file
 						elif packet_type == packet.PACKET_TYPE_META:
 							try:
-								file_size, file_hash, file_type, thumb_w, thumb_h, time_to_live, file_name_len = packet.meta_struct.unpack(data[1 : packet.meta_struct.size + 1])
+								file_size, file_hash, file_type, thumb_w, thumb_h, file_name_len, time_to_live = packet.meta_struct.unpack(data[1 : packet.meta_struct.size + 1])
 								file_name = data[1 + packet.meta_struct.size : 1 + packet.meta_struct.size + file_name_len].decode('utf8')
 								thumb_data = data[1 + packet.meta_struct.size + file_name_len :]
-								thumb = Image.fromstring('RGBA', thumb_data, (thumb_w, thumb_h))
+								thumb = Image.fromstring('RGBA', (thumb_w, thumb_h), thumb_data)
 				
 							except Exception as e:
 								raise BadPacketException(addr, e)
@@ -214,8 +251,8 @@ class Peer(threading.Thread):
 								self.incoming[file_hash] = IncomingFile(file_type, file_name, file_size, file_hash, time_to_live, thumb)
 				
 							#send a unicast acknowledgement
-							ack = packet.make_ack_packet(file_hash)
-							self.unicast_sock.sendto(ack, (addr, constant.MULTICAST_PORT))
+							ack = packet.make_ack_packet(file_hash, packet.PACKET_TYPE_ACK_META)
+							self.send_unicast(addr, ack)
 				
 		
 						#this peer is giving us another piece of some file
@@ -233,8 +270,8 @@ class Peer(threading.Thread):
 								self.incoming[file_hash].add_chunk(chunk_id, chunk)
 					
 								#send a unicast acknowledgement
-								ack = packet.make_ack_packet(file_hash, chunk_id)
-								self.unicast_sock.sendto(ack, (addr, constant.MULTICAST_PORT))
+								ack = packet.make_ack_packet(file_hash, packet.PACKET_TYPE_ACK_CHUNK, chunk_id)
+								self.send_unicast(addr, ack)
 			
 		
 						#this peer  wants us not to have the file anymore
@@ -252,9 +289,9 @@ class Peer(threading.Thread):
 							#send ack whether we had file or not, since it could be the case that before we got the metadata, 
 							#the sender wants to delete the file early; also it could be that our first ack was dropped
 							ack = packet.make_ack_packet(file_hash, packet.PACKET_TYPE_ACK_DELETE)
-							self.unicast_sock.sendto(ack, (addr, constant.MULTICAST_PORT))
+							self.send_unicast(addr, ack)
 	
-	
+
 						else:
 							raise BadPacketException(addr + " - wrong type") #TODO ugly hack
 						
@@ -262,20 +299,19 @@ class Peer(threading.Thread):
 					except socket.error:
 						#no packet in the queue, sleep for a bit
 						#constant.time_print("no more multicast packets")
-						time.sleep(2.01) #10 milliseconds
+						time.sleep(0.01) #10 milliseconds
 						break
 						
 					except BadPacketException as e:
 						constant.time_print("bad packet from " + e.source + "; " + e.reason)
 					
-				
 		
 				#send the next packet of every outgoing file
 				deleting = []
 				for outgoing in self.outgoing.values():
 					data = outgoing.next_packet()
 					if data is not None:
-						self.multicast_sock.sendto(data, (constant.MULTICAST_GROUP, constant.MULTICAST_PORT))
+						self.send_multicast(data)
 					
 					else:
 						#the file has not packets to send right now, see if we should get rid the of it
@@ -295,7 +331,7 @@ class Peer(threading.Thread):
 				#see if we need to delete any incoming file
 				deleting = []
 				for incoming in self.incoming.values():
-					if incoming.completed:
+					if incoming.complete:
 						if now - incoming.completed_at > incoming.ttl:
 							deleting.push(incoming.hash)
 							
@@ -303,6 +339,7 @@ class Peer(threading.Thread):
 					f = self.incoming[file_hash]
 					constant.time_print("deleting file " + f.name)
 					del self.incoming[file_hash]
+					
 						
 			time.sleep(0.01) #TODO I think this is needed to allow the other thread to acquire the lock, but I might be wrong
 					
@@ -346,7 +383,7 @@ if __name__ == '__main__':
 				elif command == 'peers':
 					if len(peer.others) > 0:
 						for addr in peer.others:
-							print(" " + peer.others[addr].nick + "(" + addr + ")")
+							print("}" + peer.others[addr].nick + "(" + addr + ")")
 							
 					else:
 						print("all alone")

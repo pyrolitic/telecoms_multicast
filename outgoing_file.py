@@ -32,6 +32,7 @@ class OutgoingFile(ProtoFile):
 		
 		self.deletion_request = False #whether the time to live of the file has ended, or the user wants to delete it early
 		
+		self.last_ack_at = None #when was the last ack received 
 		
 		for r in recipients:
 			self.meta_acks.add(r)
@@ -93,9 +94,13 @@ class OutgoingFile(ProtoFile):
 		
 		for addr in gone:
 			self.message("recipient" + addr + " timed out")
-			self.recipients.remove(addr)
+			del self.recipients[addr]
 		
 		data = None
+		
+		if self.last_ack_at is not None:
+			if time.time() - self.last_ack_at < constant.FILE_PACKET_INTERVAL:
+				return None #don't flood the network with packets from this file 
 		
 		if self.deletion_request:
 			if not self.deleted:
@@ -107,9 +112,9 @@ class OutgoingFile(ProtoFile):
 				data = packet.make_meta_packet(self.name, self.hash, self.size, self.type, self.thumb, self.ttl)
 		
 			elif not self.content_sent:
-				key = self.content_sent.keys[random.randrange(0, len(self.content_acks))] #pick any recipient at random
-				if not self.content_began_at: self.content_began_at = time.time()
-				chunk_id = self.content_sent[key][0] #send the first 
+				key = self.content_acks.keys()[random.randrange(0, len(self.content_acks))] #pick any recipient at random
+				if not self.content_began_at: self.content_began_at = time.time() #this is the first content packet sent
+				chunk_id = self.content_acks[key][0] #send the first 
 				data = packet.make_chunk_packet(self.hash, chunk_id, self.chunks[chunk_id])
 		
 			
@@ -122,6 +127,8 @@ class OutgoingFile(ProtoFile):
 		
 		
 	def got_ack(self, addr, packet_type, chunk_id):
+		self.last_ack_at = time.time()
+		
 		if packet_type == packet.PACKET_TYPE_ACK_META:
 			if addr in self.meta_acks:
 				self.meta_acks.remove(addr)

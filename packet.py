@@ -39,21 +39,20 @@ def make_meta_packet(file_name, file_hash, file_size, file_type, thumbnail, time
 	#type must be PACKET_TYPE_META, encoded file name and thumbnail data cannnot exceed 65461 bytes
 	
 	#truncate name to META_MAX_NAME_SIZE
-	#http://stackoverflow.com/questions/1809531/truncating-unicode-so-it-fits-a-maximum-size-when-encoded-for-wire-transfer
 	name = file_name if len(file_name) < constant.FILE_NAME_LONGEST else file_name[:constant.FILE_NAME_LONGEST]
 	encoded_name = name.encode('utf8')
 	
 	thumb_w = 0
 	thumb_h = 0
 	
-	if thumbnail:
+	if thumbnail is not None:
 		thumb_w = thumbnail.size[0]
 		thumb_h = thumbnail.size[1]
 	
 	data = packet_type_struct.pack(PACKET_TYPE_META)
 	data += meta_struct.pack(file_size, file_hash, file_type, thumb_w, thumb_h, len(encoded_name), time_to_live)
 	data += encoded_name
-	if thumbnail is not None: data += thumbnail.tostring() #uncompressed
+	if thumbnail is not None: data += thumbnail.convert("RGBA").tostring() #convert to rgba and store uncompressed
 	return data
 		
 
@@ -85,7 +84,7 @@ def make_delete_packet(file_hash):
 #type(1), file content hash(32), chunk index(4)
 ack_struct = struct.Struct(">32sI")
 def make_ack_packet(file_hash, packet_type, chunk_id = -1):
-	ack_id = chunk_id
+	ack_id = 0
 	if packet_type == PACKET_TYPE_ACK_CHUNK: ack_id = chunk_id
 	
 	data = packet_type_struct.pack(packet_type)
