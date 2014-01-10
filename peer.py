@@ -398,7 +398,7 @@ if __name__ == '__main__':
 					peer.add_file_to_send(path, ttl)
 					
 				elif command == 'help':
-					print("kill - end the progrma")
+					print("kill - end the program")
 					print("peers - list known peers")
 					print("nick <name> - change own nickname")
 					print("send <path> <ttl in seconds> - send a file to all known peers")
